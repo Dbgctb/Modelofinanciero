@@ -49,3 +49,4 @@ capturas/
 # Datos reales (diarios contables, recibos, clientes, pólizas) -- nunca al
 # repositorio, ni siquiera privado.
 carga de datos/
+frontend/query
