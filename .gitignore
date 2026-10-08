@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+*.env
+venv/
+.venv/
+env/
+
+# Node / React
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# DB / credentials
+*.sqlite3
+*.db
+
+# Claude Code (configuración personal, no de proyecto)
+.claude/settings.local.json
+
+# Archivos sueltos de referencia/captura, no código (quedan en local)
+*.msg
+*.jpg
+*.JPG
+*.jpeg
+~$*.xlsx
+~$*.xls
+capturas/
+
+# Datos reales (diarios contables, recibos, clientes, pólizas) -- nunca al
+# repositorio, ni siquiera privado.
+carga de datos/

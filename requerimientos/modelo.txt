@@ -1,0 +1,794 @@
+MODELO ANALÍTICO DE RENTABILIDAD
+
+Correduría de Seguros — Modelo Pragmatico Controller
+
+1. OBJETIVO
+
+Construir un modelo analítico que permita medir la rentabilidad real de la correduría por:
+
+compañía
+ramo
+auxiliar
+nueva producción
+cartera
+recibo
+El modelo debe:
+
+partir de la contabilidad real
+reconciliar ingresos y recibos
+imputar automáticamente ingresos y costes
+minimizar repartos artificiales
+construir una cuenta de resultados analítica
+generar dashboards de rentabilidad y eficiencia
+2. FILOSOFÍA DEL MODELO
+
+El modelo se basa en:
+
+contabilidad real
+
++
+
+imputación directa por recibo
+
++
+
+drivers simples
+
++
+
+máxima trazabilidad
+
+NO se utilizarán:
+
+centros de coste
+ABC complejo
+imputaciones manuales masivas
+estructuras organizativas complejas
+3. UNIDAD ECONÓMICA
+
+La unidad económica principal será:
+
+RECIBO
+
+Porque representa:
+
+generación de ingresos
+actividad operativa
+coste administrativo
+mantenimiento de cartera
+4. FUENTES DEL MODELO
+
+4.1 FACT_CONTABILIDAD
+
+Origen:
+ERP contable.
+
+Campos origen:
+
+Campo
+
+fecha
+
+cuenta
+
+descripción
+
+debe
+
+haber
+
+4.2 FACT_RECIBOS
+
+Origen:
+software de correduría.
+
+Campos mínimos:
+
+Campo
+
+recibo
+
+póliza
+
+fecha
+
+compañía
+
+ramo
+
+auxiliar
+
+prima
+
+comisión
+
+fecha_alta_poliza
+
+es_nueva_produccion
+
+estado
+
+5. ENRIQUECIMIENTO CONTABLE
+
+5.1 Cálculo importe
+
+Campo calculado:
+
+importe = haber - debe
+
+Criterio:
+
+ingresos positivos
+costes negativos
+5.2 Extracción automática del recibo
+
+Campo calculado:
+
+recibo = RIGHT(descripción,6)
+
+5.3 Validación del recibo
+
+El recibo será válido si:
+
+1. Es numérico
+
+2. Existe en FACT_RECIBOS
+
+5.4 Tipo imputación
+
+Si el recibo es válido
+
+tipo_imputacion = DIRECTA
+
+Si el recibo NO es válido
+
+tipo_imputacion = INDIRECTA
+
+6. MODELO DE INGRESOS
+
+6.1 Fuente oficial de ingresos
+
+Los ingresos oficiales provienen exclusivamente de contabilidad.
+
+6.2 Cuentas de ingresos
+
+Parametrizables.
+
+Ejemplo:
+
+Cuenta
+
+705
+
+706
+
+707
+
+6.3 Imputación directa ingresos
+
+Proceso:
+
+ingreso contable
+
++
+
+recibo válido
+
+=
+
+imputación directa
+
+Resultado:
+
+compañía
+ramo
+auxiliar
+nueva producción/cartera
+6.4 Reconciliación
+
+El sistema debe permitir comparar:
+
+comisión operativa
+
+vs
+
+comisión contable
+
+para detectar:
+
+diferencias
+anulaciones
+errores
+desfases
+7. MODELO DE COSTES DIRECTOS
+
+7.1 Comisión auxiliares
+
+Las cuentas 623 con recibo válido representan:
+
+coste directo auxiliar
+
+7.2 Regla
+
+623 + recibo válido
+
+=
+
+coste directo
+
+7.3 Resultado
+
+El coste queda imputado directamente a:
+
+compañía
+ramo
+auxiliar
+recibo
+8. MODELO DE COSTES INDIRECTOS
+
+Todo movimiento sin recibo válido será indirecto.
+
+Proceso:
+
+contabilidad
+
+→ naturaleza
+
+→ driver
+
+→ reparto
+
+9. NATURALEZA ECONÓMICA
+
+La naturaleza representa:
+
+qué tipo de gasto es
+
+DIM_NATURALEZA
+
+Naturaleza
+
+Personal
+
+Alquiler
+
+Tecnología
+
+Marketing
+
+Financiero
+
+Bancos
+
+Servicios profesionales
+
+Comunicaciones
+
+Viajes
+
+Impuestos
+
+Suministros
+
+10. MAPEO CONTABLE
+
+MAP_CUENTAS
+
+Relaciona:
+
+cuenta → naturaleza
+
+Ejemplo
+
+Cuenta
+
+Naturaleza
+
+640
+
+Personal
+
+621
+
+Alquiler
+
+626
+
+Financiero
+
+627
+
+Marketing
+
+628
+
+Suministros
+
+11. DRIVERS DE REPARTO
+
+DRIVER 1 — RECIBOS
+
+Uso:
+
+personal
+tecnología
+financiero
+servicios
+Fórmula:
+
+peso = recibos dimensión / recibos totales
+
+DRIVER 2 — COMISIÓN NETA
+
+Uso:
+
+alquiler
+gastos generales
+estructura fija
+Fórmula:
+
+peso =
+
+comisión neta dimensión
+
+/
+
+comisión neta total
+
+DRIVER 3 — NUEVA PRODUCCIÓN
+
+Uso:
+
+marketing
+captación
+campañas
+Fórmula:
+
+peso =
+
+comisión nueva producción dimensión
+
+/
+
+comisión nueva producción total
+
+12. NUEVA PRODUCCIÓN Y CARTERA
+
+Nueva producción
+
+Definición:
+
+pólizas dadas de alta en el ejercicio
+
+Cartera
+
+Definición:
+
+pólizas de ejercicios anteriores
+
+Objetivo
+
+Separar:
+
+rentabilidad captación
+rentabilidad cartera
+coste captación
+coste mantenimiento
+13. TABLAS DEL MODELO
+
+13.1 FACT_CONTABILIDAD_ENRIQUECIDA
+
+Campo
+
+fecha
+
+cuenta
+
+descripción
+
+debe
+
+haber
+
+importe
+
+recibo
+
+tipo_imputacion
+
+naturaleza
+
+driver
+
+13.2 FACT_RECIBOS
+
+Campo
+
+recibo
+
+póliza
+
+fecha
+
+compañía
+
+ramo
+
+auxiliar
+
+prima
+
+comisión
+
+es_nueva_produccion
+
+fecha_alta_poliza
+
+13.3 MAP_CUENTAS
+
+Cuenta
+
+Naturaleza
+
+13.4 MAP_DRIVERS
+
+Naturaleza
+
+Driver
+
+Personal
+
+Recibos
+
+Tecnología
+
+Recibos
+
+Marketing
+
+Nueva producción
+
+Alquiler
+
+Comisión neta
+
+Financiero
+
+Recibos
+
+13.5 FACT_RESULTADO_ANALITICO
+
+Tabla final del modelo.
+
+Campo
+
+fecha
+
+cuenta
+
+descripción
+
+recibo
+
+compañía
+
+ramo
+
+auxiliar
+
+naturaleza
+
+driver
+
+tipo_imputacion
+
+es_nueva_produccion
+
+importe
+
+14. CUENTA DE RESULTADOS ANALÍTICA
+
+NIVEL 1 — COMISIONES BRUTAS
+
+Origen:
+
+cuentas ingresos
+NIVEL 2 — COMISIONES AUXILIARES
+
+Origen:
+
+623 + recibo
+NIVEL 3 — COMISIÓN NETA
+
+comisión bruta - comisión auxiliar
+
+NIVEL 4 — COSTES OPERATIVOS
+
+personal
+tecnología
+financiero
+servicios
+NIVEL 5 — MARGEN OPERATIVO
+
+comisión neta - costes operativos
+
+NIVEL 6 — COSTES CAPTACIÓN
+
+marketing
+campañas
+captación
+NIVEL 7 — EBITDA ANALÍTICO
+
+15. DASHBOARDS
+
+DASHBOARD 1 — RESUMEN EJECUTIVO
+
+Objetivo:
+visión global del negocio.
+
+KPIs:
+
+ingresos
+comisión neta
+EBITDA analítico
+margen %
+crecimiento
+coste total
+coste operativo
+coste captación
+Visuales:
+
+evolución mensual
+waterfall margen
+EBITDA mensual
+distribución costes
+Filtros:
+
+año
+mes
+compañía
+ramo
+auxiliar
+DASHBOARD 2 — MARGEN POR COMPAÑÍA
+
+Objetivo:
+detectar compañías rentables y deficitarias.
+
+KPIs:
+
+comisión bruta
+comisión auxiliar
+comisión neta
+costes indirectos
+EBITDA
+margen %
+coste/recibo
+Visuales:
+
+ranking compañías
+heatmap margen
+evolución mensual
+scatter rentabilidad vs volumen
+top/bottom compañías
+Alertas:
+
+compañías con EBITDA negativo
+compañías con alto coste operativo
+compañías con baja rentabilidad
+DASHBOARD 3 — MARGEN POR AUXILIAR
+
+Objetivo:
+medir productividad y rentabilidad comercial.
+
+KPIs:
+
+ingresos generados
+comisión auxiliar
+margen neto
+coste asignado
+EBITDA
+margen %
+recibos gestionados
+comisión media/recibo
+Visuales:
+
+ranking auxiliares
+margen por auxiliar
+productividad
+evolución temporal
+distribución cartera
+Alertas:
+
+auxiliares no rentables
+alta dependencia
+baja productividad
+DASHBOARD 4 — MARGEN POR RAMO
+
+Objetivo:
+analizar rentabilidad técnica y operativa.
+
+KPIs:
+
+ingresos
+costes
+margen operativo
+EBITDA
+margen %
+coste/recibo
+comisión media
+Visuales:
+
+ranking ramos
+evolución temporal
+mix de negocio
+heatmap compañía x ramo
+dispersión margen vs volumen
+Alertas:
+
+ramos deficitarios
+ramos con alto coste operativo
+concentración excesiva
+DASHBOARD 5 — NUEVA PRODUCCIÓN VS CARTERA
+
+Objetivo:
+medir rentabilidad de captación.
+
+KPIs:
+
+nueva producción
+margen nueva producción
+coste captación
+rentabilidad cartera
+ratio captación
+payback captación
+Visuales:
+
+cartera vs NP
+evolución captación
+margen NP
+distribución costes marketing
+cohortes captación
+Alertas:
+
+captación no rentable
+exceso coste comercial
+deterioro cartera
+DASHBOARD 6 — OPERACIONES Y EFICIENCIA
+
+Objetivo:
+medir eficiencia operativa.
+
+KPIs:
+
+coste/recibo
+margen/recibo
+recibos gestionados
+productividad
+coste operativo total
+Visuales:
+
+evolución coste unitario
+ranking eficiencia
+distribución costes
+tendencia operativa
+Alertas:
+
+incremento coste unitario
+pérdida eficiencia
+concentración operativa
+DASHBOARD 7 — COSTES Y ESTRUCTURA
+
+Objetivo:
+analizar estructura de gasto.
+
+KPIs:
+
+costes por naturaleza
+peso estructura
+peso personal
+peso marketing
+evolución costes
+Visuales:
+
+árbol de costes
+pie naturaleza
+waterfall costes
+evolución mensual
+estructura vs ingresos
+Alertas:
+
+crecimiento costes fijo
+desviaciones
+sobrepeso estructura
+16. KPIs GLOBALES
+
+Rentabilidad
+
+EBITDA
+margen operativo
+margen %
+margen/recibo
+margen/comisión
+Operación
+
+coste/recibo
+recibos
+productividad
+eficiencia
+Comercial
+
+nueva producción
+coste captación
+rentabilidad NP
+rentabilidad cartera
+Concentración
+
+concentración compañía
+concentración ramo
+concentración auxiliar
+17. TRAZABILIDAD
+
+Cada importe final debe poder explicar:
+
+origen contable
+
+importe calculado
+
+recibo extraído
+
+validación recibo
+
+naturaleza
+
+driver
+
+destino analítico
+
+18. REGLAS CRÍTICAS
+
+Regla 1
+
+El importe siempre se calcula automáticamente:
+
+importe = haber - debe
+
+Regla 2
+
+El recibo siempre se extrae automáticamente desde descripción.
+
+Regla 3
+
+Los ingresos nunca se reparten.
+
+Regla 4
+
+Las comisiones auxiliares nunca se reparten.
+
+Regla 5
+
+Todo coste indirecto debe pasar por:
+
+naturaleza
+driver
+reparto
+Regla 6
+
+El modelo debe recalcularse automáticamente en cada cierre mensual.
+
+19. ENTREGABLES
+
+Modelo analítico
+Tabla contable enriquecida
+Tabla recibos normalizada
+Tabla clasificación cuentas
+Tabla drivers
+Tabla resultado analítico
+Cuenta resultados analítica
+Dashboard ejecutivo
+Dashboard margen compañía
+Dashboard margen auxiliar
+Dashboard margen ramo
+Dashboard captación
+Dashboard operaciones
+Dashboard costes
+Trazabilidad completa

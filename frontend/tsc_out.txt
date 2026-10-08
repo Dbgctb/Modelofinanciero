@@ -1,0 +1,20 @@
+﻿src/pages/admin/Mapeo.tsx(5,56): error TS6133: 'Tabs' is declared but its value is never read.
+src/pages/admin/Mapeo.tsx(6,39): error TS6133: 'Divider' is declared but its value is never read.
+src/pages/admin/Mapeo.tsx(10,45): error TS6133: 'CheckCircleOutlined' is declared but its value is never read.
+src/pages/admin/Usuarios.tsx(4,35): error TS6133: 'Popconfirm' is declared but its value is never read.
+src/pages/admin/Usuarios.tsx(5,3): error TS6133: 'Badge' is declared but its value is never read.
+src/pages/admin/Usuarios.tsx(9,3): error TS6133: 'CheckCircleOutlined' is declared but its value is never read.
+src/pages/admin/Usuarios.tsx(9,24): error TS6133: 'StopOutlined' is declared but its value is never read.
+src/pages/admin/Usuarios.tsx(10,3): error TS6133: 'LockOutlined' is declared but its value is never read.
+src/pages/admin/Usuarios.tsx(10,17): error TS6133: 'UnlockOutlined' is declared but its value is never read.
+src/pages/costes/Clasificacion.tsx(4,10): error TS6133: 'Badge' is declared but its value is never read.
+src/pages/costes/Clasificacion.tsx(4,47): error TS6133: 'Tooltip' is declared but its value is never read.
+src/pages/costes/Comparativa.tsx(3,27): error TS6133: 'Button' is declared but its value is never read.
+src/pages/costes/Comparativa.tsx(6,10): error TS6133: 'SearchOutlined' is declared but its value is never read.
+src/pages/costes/Imputacion.tsx(6,31): error TS6133: 'PieChartOutlined' is declared but its value is never read.
+src/pages/costes/KPIsCostes.tsx(3,60): error TS6133: 'Statistic' is declared but its value is never read.
+src/pages/dashboard/Dashboard.tsx(303,33): error TS2554: Expected 2 arguments, but got 1.
+src/pages/presupuestacion/PresupuestoIngresos.tsx(1242,46): error TS6133: 'r' is declared but its value is never read.
+src/pages/presupuestacion/SeguimientoReal.tsx(4,33): error TS6133: 'Tooltip' is declared but its value is never read.
+src/pages/presupuestacion/SeguimientoReal.tsx(4,49): error TS6133: 'Badge' is declared but its value is never read.
+src/pages/presupuestacion/SeguimientoReal.tsx(16,47): error TS6133: 'ReferenceLine' is declared but its value is never read.
