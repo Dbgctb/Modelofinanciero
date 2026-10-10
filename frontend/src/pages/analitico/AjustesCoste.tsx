@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { analiticoApi } from '../../api/analitico'
+import { crossSellingApi } from '../../api/crossSelling'
 import { apiError } from '../../utils/errorHandler'
 
 const { Text, Title } = Typography
@@ -52,6 +53,13 @@ export default function AjustesCoste() {
     queryFn: () => analiticoApi.listarAjustesCoste(ejercicio).then(r => r.data),
     enabled: !!ejercicio,
   })
+
+  const { data: auxiliares = [] } = useQuery({
+    queryKey: ['auxiliares', ejercicio],
+    queryFn: () => crossSellingApi.getAuxiliares(ejercicio),
+    enabled: !!ejercicio,
+  })
+  const opcionesAuxiliar = auxiliares.map(a => ({ value: a.auxiliar, label: a.auxiliar }))
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['ajustes-coste', ejercicio] })
 
@@ -214,7 +222,17 @@ export default function AjustesCoste() {
                 label="Auxiliar"
                 rules={[{ required: true, message: 'Obligatorio' }]}
               >
-                <Input placeholder="Nombre exacto del auxiliar…" />
+                <Select
+                  options={opcionesAuxiliar}
+                  placeholder={
+                    opcionesAuxiliar.length
+                      ? 'Selecciona auxiliar…'
+                      : `Sin auxiliares cargados para ${ejercicio} — carga recibos primero`
+                  }
+                  showSearch
+                  allowClear
+                  notFoundContent="Sin resultados"
+                />
               </Form.Item>
 
               <Form.Item
