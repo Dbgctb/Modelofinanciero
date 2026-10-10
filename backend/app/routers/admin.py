@@ -136,17 +136,23 @@ def reset_datos(
     Preserva: mapeo de cuentas, tasas de mercado, usuarios, meses_reales
     (solo se le desvincula la carga).
 
-    Bug real reportado en vivo (2026-10-10): usaba TRUNCATE, que en
-    Postgres rechaza la operación entera si CUALQUIER tabla tiene una FK
-    hacia una de las tablas listadas -- da igual que esa fila ya se haya
-    puesto a NULL antes (a diferencia de DELETE, que sí respeta el valor
-    real fila a fila). Aquí hay dos tablas así:
-    fact_resultado_analitico (Modelo Analítico, derivada de diario_apuntes
-    y recibos -- se borra junto al resto, no es un dato independiente) y
-    meses_reales (Seguimiento real -- sus filas SÍ se preservan, solo se
-    le desvincula la carga). Por eso DELETE en vez de TRUNCATE: más lento
-    en tablas con millones de filas, pero aquí no hay ese volumen y es lo
-    único que da el resultado correcto sin perder meses_reales.
+    Bug real reportado en vivo (2026-10-10), dos vueltas:
+    1) Usaba TRUNCATE sobre las 4 tablas grandes a la vez, incluyendo
+       cargas_contables -- Postgres lo rechaza en bloque porque
+       meses_reales tiene una FK hacia cargas_contables (da igual que esa
+       fila ya se haya puesto a NULL antes: TRUNCATE comprueba la
+       restricción, no el valor real fila a fila). Cambiado a DELETE para
+       las 4 juntas -- correcto, pero con ~230.000 filas reales (diario +
+       recibos) DELETE es muchísimo más lento que TRUNCATE: borra fila a
+       fila, con mantenimiento de índice y WAL por cada una.
+    2) Arreglo real: solo cargas_contables (8 filas) necesita DELETE --
+       es la única con un referenciador "blando" (meses_reales) que hay
+       que preservar. Las otras tres (incidencias, fact_resultado_analitico,
+       diario_apuntes, recibos) no las referencia nada fuera de este
+       mismo grupo, así que se pueden TRUNCATE juntas sin tocar
+       cargas_contables -- recupera la velocidad O(1) de TRUNCATE donde
+       de verdad importa (las tablas grandes) y dejar el DELETE solo para
+       la tabla pequeña, donde el coste es irrelevante.
     """
     # Conteos aproximados desde pg_stat (instantáneo, no hace full scan)
     rows = db.execute(text(
@@ -158,13 +164,10 @@ def reset_datos(
     # meses_reales.carga_id es FK SET NULL → desvincular antes de borrar cargas_contables
     db.execute(text("UPDATE meses_reales SET carga_id = NULL WHERE carga_id IS NOT NULL"))
 
-    # Orden hijo→padre: cada DELETE solo necesita que sus propios
-    # referenciadores ya estén vacíos/desvinculados.
-    db.execute(text("DELETE FROM incidencias"))
-    db.execute(text("DELETE FROM fact_resultado_analitico"))
-    db.execute(text("DELETE FROM diario_apuntes"))
+    # Las tablas grandes no las referencia nada fuera de este grupo -> TRUNCATE (O(1)).
+    db.execute(text("TRUNCATE TABLE incidencias, fact_resultado_analitico, diario_apuntes, recibos"))
+    # cargas_contables sí la referencia meses_reales (ya desvinculada arriba) -> DELETE, pero solo 8 filas.
     db.execute(text("DELETE FROM cargas_contables"))
-    db.execute(text("DELETE FROM recibos"))
     db.commit()
 
     return {
