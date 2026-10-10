@@ -6,6 +6,8 @@ import { QueryClient, QueryClientProvider, QueryCache, MutationCache } from '@ta
 import AppLayout from './components/layout/AppLayout'
 import ProtectedRoute from './components/common/ProtectedRoute'
 import Login from './pages/auth/Login'
+import ForgotPassword from './pages/auth/ForgotPassword'
+import ResetPassword from './pages/auth/ResetPassword'
 import Dashboard from './pages/dashboard/Dashboard'
 import CargaDatos from './pages/presupuestacion/CargaDatos'
 import DetalleRecibos from './pages/presupuestacion/DetalleRecibos'
@@ -89,6 +91,8 @@ export default function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route
                 path="/"
                 element={

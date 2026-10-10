@@ -2,14 +2,14 @@ import { useState } from 'react'
 import {
   Card, Table, Button, Tag, Space, Typography, Modal, Form,
   Input, Select, Switch, Tooltip, message, Tabs,
-  Alert, Row, Col, Statistic, Descriptions,
+  Alert, Row, Col, Statistic, Descriptions, Popconfirm,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, KeyOutlined, UserOutlined,
-  HistoryOutlined,
+  HistoryOutlined, LinkOutlined, CopyOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { usersApi, type AppUser, type UserRole } from '../../api/users'
+import { usersApi, type AppUser, type UserRole, type ResetRequest } from '../../api/users'
 import { useAuthStore } from '../../store/authStore'
 import { apiError } from '../../utils/errorHandler'
 
@@ -31,6 +31,8 @@ const ACCION_LABELS: Record<string, string> = {
   USER_UPDATED:     'Usuario modificado',
   PASSWORD_RESET:   'Contraseña reseteada',
   PASSWORD_CHANGED: 'Contraseña cambiada',
+  PASSWORD_RESET_REQUESTED: 'Recuperación solicitada',
+  PASSWORD_RESET_COMPLETED: 'Recuperación completada',
 }
 
 function fmtDate(iso: string | null) {
@@ -65,6 +67,12 @@ export default function Usuarios() {
   const { data: auditData } = useQuery({
     queryKey: ['audit-log', auditPage],
     queryFn: () => usersApi.auditLog(PAGE, (auditPage - 1) * PAGE).then(r => r.data),
+  })
+
+  const { data: resetRequests = [] } = useQuery({
+    queryKey: ['reset-requests'],
+    queryFn: () => usersApi.resetRequests().then(r => r.data),
+    refetchInterval: 30_000,
   })
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -110,6 +118,21 @@ export default function Usuarios() {
     },
     onError: (e) => message.error(apiError(e, 'Error al resetear la contraseña')),
   })
+
+  const cancelarSolicitud = useMutation({
+    mutationFn: (id: string) => usersApi.cancelResetRequest(id),
+    onSuccess: () => {
+      message.success('Solicitud cancelada')
+      qc.invalidateQueries({ queryKey: ['reset-requests'] })
+    },
+    onError: (e) => message.error(apiError(e, 'No se pudo cancelar la solicitud')),
+  })
+
+  const copiarEnlace = (token: string) => {
+    const url = `${window.location.origin}/reset-password?token=${token}`
+    navigator.clipboard.writeText(url)
+    message.success('Enlace copiado al portapapeles')
+  }
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -250,6 +273,59 @@ export default function Usuarios() {
     },
   ]
 
+  // ── Columnas solicitudes de reset ─────────────────────────────────────────
+
+  const colsReset = [
+    {
+      title: 'Usuario',
+      dataIndex: 'username',
+      render: (v: string, row: ResetRequest) => (
+        <div>
+          <div style={{ fontWeight: 500 }}>{row.full_name}</div>
+          <Text type="secondary" style={{ fontSize: 12 }}>@{v} · {row.email}</Text>
+        </div>
+      ),
+    },
+    {
+      title: 'Solicitada',
+      dataIndex: 'created_at',
+      width: 160,
+      render: (v: string) => <Text style={{ fontSize: 12 }}>{fmtDate(v)}</Text>,
+    },
+    {
+      title: 'Caduca',
+      dataIndex: 'expires_at',
+      width: 160,
+      render: (v: string) => {
+        const mins = Math.round((new Date(v).getTime() - Date.now()) / 60000)
+        return <Tag color={mins < 10 ? 'error' : 'warning'}>{mins > 0 ? `en ${mins} min` : 'caducada'}</Tag>
+      },
+    },
+    {
+      title: '',
+      width: 180,
+      render: (_: any, row: ResetRequest) => (
+        <Space>
+          <Tooltip title="Copiar enlace de recuperación">
+            <Button size="small" icon={<CopyOutlined />} onClick={() => copiarEnlace(row.token)}>
+              Copiar enlace
+            </Button>
+          </Tooltip>
+          <Popconfirm
+            title="¿Cancelar esta solicitud?"
+            onConfirm={() => cancelarSolicitud.mutate(row.id)}
+            okText="Cancelar solicitud"
+            cancelText="Volver"
+          >
+            <Tooltip title="Cancelar">
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -304,6 +380,35 @@ export default function Usuarios() {
                   size="small"
                   pagination={{ pageSize: 15, showTotal: (t) => `${t} usuarios` }}
                   rowClassName={(row) => !row.is_active ? 'ant-table-row-disabled' : ''}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: 'reset-requests',
+            label: (
+              <span>
+                <LinkOutlined /> Solicitudes de reset
+                {resetRequests.length > 0 && (
+                  <Tag color="warning" style={{ marginLeft: 6 }}>{resetRequests.length}</Tag>
+                )}
+              </span>
+            ),
+            children: (
+              <Card>
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message="Sin email configurado, copia el enlace y pásaselo al usuario (WhatsApp, en persona...). Caduca a los 60 minutos."
+                />
+                <Table
+                  dataSource={resetRequests}
+                  columns={colsReset}
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  locale={{ emptyText: 'No hay solicitudes de recuperación pendientes.' }}
                 />
               </Card>
             ),

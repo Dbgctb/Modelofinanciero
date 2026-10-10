@@ -10,9 +10,20 @@ from ..core.dependencies import get_current_user
 from ..models.user import User
 from ..models.refresh_token import RefreshToken
 from ..models.audit import AuditLog
-from ..schemas.auth import LoginRequest, TokenResponse, RefreshRequest, ChangePasswordRequest
+from ..models.password_reset import PasswordResetToken
+from ..schemas.auth import (
+    LoginRequest, TokenResponse, RefreshRequest, ChangePasswordRequest,
+    ForgotPasswordRequest, ResetPasswordRequest,
+)
+import secrets
 
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
+
+# Sin servicio de email configurado (decisión del usuario, 2026-10-10): el
+# enlace de un solo uso no se envía por correo -- queda visible para un
+# admin en GET /users/reset-requests, que lo relaya al usuario. 60 minutos
+# de validez, igual de corto que un enlace de email real.
+RESET_TOKEN_TTL_MINUTES = 60
 
 
 def _log(db: Session, action: str, user: User = None, request: Request = None, detail: str = None):
@@ -164,6 +175,60 @@ def change_password(
 
     _log(db, "PASSWORD_CHANGED", user=current_user, request=request)
     return {"message": "Contraseña actualizada correctamente"}
+
+
+@router.post("/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    """No revela si el email existe (mismo mensaje siempre) -- evita que
+    alguien use este endpoint para averiguar qué cuentas hay dadas de
+    alta. Si existe, genera un enlace de un solo uso que solo un admin
+    puede ver (GET /users/reset-requests) y relayar."""
+    user = db.query(User).filter(User.email == payload.email.lower(), User.is_active == True).first()
+    if user:
+        db.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id, PasswordResetToken.used == False,
+        ).update({"used": True})
+        token = PasswordResetToken(
+            user_id=user.id,
+            token=secrets.token_urlsafe(32),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=RESET_TOKEN_TTL_MINUTES),
+        )
+        db.add(token)
+        db.commit()
+        _log(db, "PASSWORD_RESET_REQUESTED", user=user, request=request)
+
+    return {
+        "message": "Si el email existe, se ha generado una solicitud de recuperación. "
+                    "Contacta con el administrador para obtener el enlace."
+    }
+
+
+@router.post("/reset-password")
+def reset_password_with_token(payload: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    prt = db.query(PasswordResetToken).filter(PasswordResetToken.token == payload.token).first()
+    now = datetime.now(timezone.utc)
+    if not prt or prt.used or prt.expires_at < now:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El enlace no es válido o ha caducado. Pide uno nuevo.")
+
+    user = db.query(User).filter(User.id == prt.user_id, User.is_active == True).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El enlace no es válido o ha caducado. Pide uno nuevo.")
+
+    user.hashed_password = hash_password(payload.new_password)
+    user.must_change_password = False
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    prt.used = True
+    db.commit()
+
+    # Mismo criterio que change-password: un reset invalida todas las sesiones activas.
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user.id, RefreshToken.revoked == False,
+    ).update({"revoked": True})
+    db.commit()
+
+    _log(db, "PASSWORD_RESET_COMPLETED", user=user, request=request)
+    return {"message": "Contraseña actualizada correctamente. Ya puedes iniciar sesión."}
 
 
 @router.get("/me")

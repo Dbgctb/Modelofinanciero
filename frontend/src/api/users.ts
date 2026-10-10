@@ -58,4 +58,20 @@ export const usersApi = {
     api.get<{ total: number; items: AuditEntry[] }>('/users/audit-log', {
       params: { limit, offset },
     }),
+
+  resetRequests: () =>
+    api.get<ResetRequest[]>('/users/reset-requests'),
+
+  cancelResetRequest: (id: string) =>
+    api.delete(`/users/reset-requests/${id}`),
+}
+
+export interface ResetRequest {
+  id: string
+  username: string
+  full_name: string
+  email: string
+  token: string
+  expires_at: string
+  created_at: string
 }

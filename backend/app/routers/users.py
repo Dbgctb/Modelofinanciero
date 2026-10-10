@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ from ..core.dependencies import get_current_user, require_admin
 from ..core.security import hash_password, validate_password_strength
 from ..models.user import User
 from ..models.audit import AuditLog
+from ..models.password_reset import PasswordResetToken
 from ..schemas.user import UserCreate, UserUpdate, UserResponse
 
 router = APIRouter(prefix="/users", tags=["Usuarios"])
@@ -164,3 +166,46 @@ def get_audit_log(
         .all()
     )
     return {"total": total, "items": logs}
+
+
+@router.get("/reset-requests")
+def list_reset_requests(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Solicitudes de recuperación de contraseña pendientes (no usadas,
+    sin caducar) -- sin email configurado, el admin ve aquí el enlace de
+    un solo uso y lo relaya al usuario a mano."""
+    now = datetime.now(timezone.utc)
+    rows = (
+        db.query(PasswordResetToken, User)
+        .join(User, User.id == PasswordResetToken.user_id)
+        .filter(PasswordResetToken.used == False, PasswordResetToken.expires_at > now)
+        .order_by(PasswordResetToken.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": str(prt.id),
+            "username": user.username,
+            "full_name": user.full_name,
+            "email": user.email,
+            "token": prt.token,
+            "expires_at": prt.expires_at.isoformat(),
+            "created_at": prt.created_at.isoformat(),
+        }
+        for prt, user in rows
+    ]
+
+
+@router.delete("/reset-requests/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_reset_request(
+    request_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    prt = db.query(PasswordResetToken).filter(PasswordResetToken.id == request_id).first()
+    if not prt:
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+    prt.used = True
+    db.commit()

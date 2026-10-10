@@ -1,5 +1,7 @@
 # CLAUDE.md — Gestor Financiero Correduría de Seguros
 
+Este archivo contiene lo específico de este proyecto. El contrato operativo general (cómo explorar, planificar, el trato con seguridad/datos/git/tests, etc.) vive en `../CLAUDE.md` (raíz de `Antigravity/`) y aplica igual aquí — este documento lo complementa, nunca lo sustituye.
+
 ## Descripción del proyecto
 Aplicación web full-stack para gestión financiera de una correduría de seguros. Permite presupuestación, seguimiento real, control de costes, KPIs, tesorería, rentabilidad por cliente y motor de cross-selling/detección de fuga.
 

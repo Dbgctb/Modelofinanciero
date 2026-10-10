@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Form, Input, Button, Card, Alert, Typography } from 'antd'
 import { LockOutlined, UserOutlined } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { authApi } from '../../api/auth'
 import { useAuthStore } from '../../store/authStore'
 
@@ -107,6 +107,10 @@ export default function Login() {
             </Button>
           </Form.Item>
         </Form>
+
+        <div style={{ textAlign: 'center', marginTop: 16 }}>
+          <Link to="/forgot-password">¿Has olvidado tu contraseña?</Link>
+        </div>
       </Card>
     </div>
   )
