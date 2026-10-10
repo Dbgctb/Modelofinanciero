@@ -39,7 +39,7 @@ def _calcular_totales_tipo(db: Session, carga_id) -> dict:
 
 ALLOWED_EXCEL = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"}
 ALLOWED_CSV = {"text/csv", "application/csv", "text/plain"}
-MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB -- el CSV de recibos consolidado real pesa ~23 MB (reportado en vivo, 2026-10-10)
 
 
 @router.post("/recibos")
