@@ -15,6 +15,7 @@ from ..schemas.auth import (
     LoginRequest, TokenResponse, RefreshRequest, ChangePasswordRequest,
     ForgotPasswordRequest, ResetPasswordRequest,
 )
+from ..core.limiter import limiter
 import secrets
 
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
@@ -44,6 +45,7 @@ def _hash_token(token: str) -> str:
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit("10/minute")
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(
         (User.username == payload.username.lower()) | (User.email == payload.username.lower())
@@ -178,6 +180,7 @@ def change_password(
 
 
 @router.post("/forgot-password")
+@limiter.limit("5/minute")
 def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
     """No revela si el email existe (mismo mensaje siempre) -- evita que
     alguien use este endpoint para averiguar qué cuentas hay dadas de
@@ -204,6 +207,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
 
 
 @router.post("/reset-password")
+@limiter.limit("10/minute")
 def reset_password_with_token(payload: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
     prt = db.query(PasswordResetToken).filter(PasswordResetToken.token == payload.token).first()
     now = datetime.now(timezone.utc)
