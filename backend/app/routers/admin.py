@@ -133,8 +133,20 @@ def reset_datos(
 ):
     """
     Elimina todas las cargas (diarios, recibos, apuntes, incidencias).
-    Preserva: mapeo de cuentas, tasas de mercado, usuarios.
-    Usa TRUNCATE — ~50x más rápido que DELETE para tablas grandes.
+    Preserva: mapeo de cuentas, tasas de mercado, usuarios, meses_reales
+    (solo se le desvincula la carga).
+
+    Bug real reportado en vivo (2026-10-10): usaba TRUNCATE, que en
+    Postgres rechaza la operación entera si CUALQUIER tabla tiene una FK
+    hacia una de las tablas listadas -- da igual que esa fila ya se haya
+    puesto a NULL antes (a diferencia de DELETE, que sí respeta el valor
+    real fila a fila). Aquí hay dos tablas así:
+    fact_resultado_analitico (Modelo Analítico, derivada de diario_apuntes
+    y recibos -- se borra junto al resto, no es un dato independiente) y
+    meses_reales (Seguimiento real -- sus filas SÍ se preservan, solo se
+    le desvincula la carga). Por eso DELETE en vez de TRUNCATE: más lento
+    en tablas con millones de filas, pero aquí no hay ese volumen y es lo
+    único que da el resultado correcto sin perder meses_reales.
     """
     # Conteos aproximados desde pg_stat (instantáneo, no hace full scan)
     rows = db.execute(text(
@@ -143,12 +155,16 @@ def reset_datos(
     )).fetchall()
     stats = {r[0]: int(r[1]) for r in rows}
 
-    # meses_reales.carga_id es FK SET NULL → actualizar antes del TRUNCATE
+    # meses_reales.carga_id es FK SET NULL → desvincular antes de borrar cargas_contables
     db.execute(text("UPDATE meses_reales SET carga_id = NULL WHERE carga_id IS NOT NULL"))
 
-    # TRUNCATE en orden hijo→padre elimina restricciones FK sin CASCADE
-    # Es O(1): desaloja páginas de datos sin procesar fila por fila
-    db.execute(text("TRUNCATE TABLE incidencias, diario_apuntes, cargas_contables, recibos"))
+    # Orden hijo→padre: cada DELETE solo necesita que sus propios
+    # referenciadores ya estén vacíos/desvinculados.
+    db.execute(text("DELETE FROM incidencias"))
+    db.execute(text("DELETE FROM fact_resultado_analitico"))
+    db.execute(text("DELETE FROM diario_apuntes"))
+    db.execute(text("DELETE FROM cargas_contables"))
+    db.execute(text("DELETE FROM recibos"))
     db.commit()
 
     return {
