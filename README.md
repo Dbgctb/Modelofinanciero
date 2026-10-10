@@ -32,6 +32,20 @@ uvicorn app.main:app --reload
 # Docs en http://localhost:8000/api/docs
 ```
 
+### Si nadie puede entrar (contraseña de admin olvidada)
+
+El flujo de "¿Has olvidado tu contraseña?" de la web depende de que un admin
+ya logueado vea la solicitud en Usuarios → Solicitudes de reset. Si el único
+admin es quien se ha quedado fuera, usa este script en el servidor en su
+lugar (acceso directo a BD, sin pasar por el login):
+
+```bash
+cd backend
+venv\Scripts\activate
+python reset_password.py
+# Pide usuario/email y la contraseña nueva, y la aplica directamente.
+```
+
 ---
 
 ## Frontend (React + Vite)

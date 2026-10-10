@@ -91,6 +91,27 @@ frontend/src/
 
 ---
 
+## Recuperación de contraseña (sin email configurado)
+
+Decisión del usuario (2026-10-10): sin SMTP configurado, `POST /auth/forgot-password`
+no envía ningún correo -- genera un `PasswordResetToken` (60 min, un solo uso)
+que solo un admin ya logueado puede ver y relayar, en Usuarios → "Solicitudes
+de reset" (`GET/DELETE /users/reset-requests`). `POST /auth/reset-password`
+consume el token.
+
+**Gap conocido y su solución:** si el único admin olvida su propia
+contraseña, no hay nadie que pueda ver su solicitud (circular -- hace falta
+estar logueado como admin para ver la pantalla que la muestra). Para ese
+caso, `backend/reset_password.py` resetea cualquier contraseña directamente
+en BD, sin pasar por el login web (mismo patrón que `create_admin.py`). Ver
+README § "Si nadie puede entrar".
+
+Si en el futuro se conecta un email real (SMTP/Resend/SendGrid), el cambio
+es en `forgot_password()` (`app/routers/auth.py`) -- añadir el envío ahí no
+rompe nada del resto del flujo, que ya está construido alrededor del token.
+
+---
+
 ## Módulo Cross-Selling y Alertas de Fuga
 
 ### Fuentes de datos
