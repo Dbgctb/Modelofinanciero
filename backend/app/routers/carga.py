@@ -370,6 +370,7 @@ def detalle_recibos(
     tipo_negocio: Optional[str] = Query(None),
     ramo: Optional[str] = Query(None),
     compania: Optional[str] = Query(None),
+    ejercicio: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -382,7 +383,11 @@ def detalle_recibos(
     if not carga:
         raise HTTPException(status_code=404, detail="Carga de recibos no encontrada")
 
-    q = db.query(Recibo).filter(Recibo.ejercicio == carga.ejercicio)
+    # Recibo.ejercicio es el año de efecto de cada recibo, no el de la carga (un
+    # fichero trae varios años), así que el año es un filtro opcional.
+    q = db.query(Recibo)
+    if ejercicio is not None:
+        q = q.filter(Recibo.ejercicio == ejercicio)
     if tipo_negocio:
         q = q.filter(Recibo.tipo_negocio == tipo_negocio)
     if ramo:

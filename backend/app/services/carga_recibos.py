@@ -64,8 +64,13 @@ def _parse_decimal(valor) -> float | None:
 
 def cargar_csv_recibos(db: Session, contenido: bytes, ejercicio: int, carga: CargaContable) -> Tuple[int, int]:
     """
-    Carga el CSV de recibos en la tabla recibos para el ejercicio dado.
-    Devuelve (insertados, actualizados).
+    Carga el CSV de recibos en la tabla recibos. Devuelve (insertados, actualizados).
+
+    El ejercicio de cada recibo es el año de su fecha de efecto (`desde`); el
+    `ejercicio` de la carga solo se usa si el recibo no trae fecha. Antes todos
+    los recibos del fichero tomaban el ejercicio de la carga, y como el CSV real
+    trae la historia completa (2017-2027) todo quedaba como 2025: Cross-selling
+    mezclaba años y la fuga no tenía ejercicio anterior con el que comparar.
     """
     # Detectar separador (punto y coma o coma)
     muestra = contenido[:2000].decode('latin-1', errors='replace')
@@ -82,11 +87,10 @@ def cargar_csv_recibos(db: Session, contenido: bytes, ejercicio: int, carga: Car
     # luego aplicar renombrados donde la clave normalizada ≠ campo interno.
     df.columns = [_RECIBOS_RENAMES.get(norm_col(c), norm_col(c)) for c in df.columns]
 
-    # Pre-carga completa en memoria: 1 query en lugar de N queries
-    recibo_dict: dict[str, Recibo] = {
-        r.codigo: r
-        for r in db.query(Recibo).filter(Recibo.ejercicio == ejercicio).all()
-    }
+    # Pre-carga completa en memoria: 1 query en lugar de N queries. Todos los
+    # ejercicios: el código identifica al recibo aunque su año sea otro que el
+    # de la carga (si no, recargar el fichero duplicaría los de otros años).
+    recibo_dict: dict[str, Recibo] = {r.codigo: r for r in db.query(Recibo).all()}
 
     insertados = 0
     actualizados = 0
@@ -116,11 +120,12 @@ def cargar_csv_recibos(db: Session, contenido: bytes, ejercicio: int, carga: Car
         clase_raw = str(row.get('clase', '')).strip().upper()
         tipo_negocio = _CLASE_TIPO_NEGOCIO.get(clase_raw)
 
+        desde = _parse_fecha(row.get('desde'))
         datos = {
-            'ejercicio': ejercicio,
+            'ejercicio': desde.year if desde else ejercicio,
             'codigo': codigo,
             'recibo_cia': str(row.get('recibo_cia', '')).strip() or None,
-            'desde': _parse_fecha(row.get('desde')),
+            'desde': desde,
             'hasta': _parse_fecha(row.get('hasta')),
             'numero_poliza': str(row.get('numero_poliza', '')).strip() or None,
             'compania': str(row.get('compania', '')).strip() or None,

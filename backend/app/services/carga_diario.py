@@ -147,17 +147,16 @@ def procesar_diario_excel(
         for m in db.query(MapCuentaContable).filter(MapCuentaContable.activo == True).all()
     }
 
-    # For historical loads: search all exercises (most recent wins) so ramo/tipo_negocio
-    # can be resolved even when historical-year recibos are not loaded.
-    if tipo_carga == TipoCarga.HISTORICO_ESTADISTICO:
-        recibo_dict: dict[str, Recibo] = {}
-        for r in db.query(Recibo).order_by(Recibo.ejercicio.asc()).all():
-            recibo_dict[r.codigo] = r  # later (more recent) year overrides
-    else:
-        recibo_dict: dict[str, Recibo] = {
-            r.codigo: r
-            for r in db.query(Recibo).filter(Recibo.ejercicio == ejercicio).all()
-        }
+    # Search all exercises (most recent wins): Recibo.ejercicio is the year of the
+    # recibo's fecha de efecto, so an apunte of this ejercicio can belong to a
+    # recibo with efecto in another year (e.g. efecto Dec 2024, cobrado 2025).
+    # For non-historical loads a recibo of the same ejercicio still takes precedence.
+    recibo_dict: dict[str, Recibo] = {}
+    for r in db.query(Recibo).order_by(Recibo.ejercicio.asc()).all():
+        recibo_dict[r.codigo] = r  # later (more recent) year overrides
+    if tipo_carga != TipoCarga.HISTORICO_ESTADISTICO:
+        for r in db.query(Recibo).filter(Recibo.ejercicio == ejercicio).all():
+            recibo_dict[r.codigo] = r
 
     # ── Row processing — plain dicts, no ORM object overhead ──────────────
     correctos = 0
