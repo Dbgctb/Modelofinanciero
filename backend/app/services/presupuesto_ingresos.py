@@ -266,8 +266,16 @@ def detectar_atipicos(por_mes: Dict[str, float], umbral_zscore: float = 2.0) -> 
 # RF-ING-15: modelos estadísticos
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _calcular_crec_interanual(totales: List[Tuple[int, float]]) -> float:
-    """Mediana de tasas YoY. Filtra outliers. Cap [-15%, +20%]."""
+# Tope superior del crecimiento interanual. Nueva producción usa uno más bajo:
+# muchas líneas NP son pequeñas y muy volátiles, y con +20% un 31% de la base NP
+# 2025 quedaba clavada en el tope, proyectando +9,8% de NP con un histórico
+# agregado que bajaba (-7,9% en 2024, -4,5% en 2025). Decisión del usuario 2026-10-23.
+CAP_CRECIMIENTO_CARTERA = 20.0
+CAP_CRECIMIENTO_NP = 10.0
+
+
+def _calcular_crec_interanual(totales: List[Tuple[int, float]], cap_max: float = CAP_CRECIMIENTO_CARTERA) -> float:
+    """Mediana de tasas YoY. Filtra outliers. Cap [-15%, +cap_max]."""
     if len(totales) < 2:
         return 0.0
     tasas = []
@@ -285,7 +293,7 @@ def _calcular_crec_interanual(totales: List[Tuple[int, float]]) -> float:
     tasas.sort()
     n = len(tasas)
     mediana = tasas[n // 2] if n % 2 else (tasas[n // 2 - 1] + tasas[n // 2]) / 2.0
-    return round(max(-15.0, min(20.0, mediana)), 4)
+    return round(max(-15.0, min(cap_max, mediana)), 4)
 
 
 def calcular_crecimiento_estadistico(por_mes: Dict[str, float]) -> float:
@@ -368,11 +376,13 @@ def crear_presupuesto(db: Session, ejercicio: int, usuario_id: str) -> Presupues
 # Generación principal — DOS líneas por grupo (compañía/ramo/auxiliar)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _metodo_y_crec(totales_hist: List, por_mes: Dict, prefijo: str = '') -> Tuple[float, str]:
+def _metodo_y_crec(
+    totales_hist: List, por_mes: Dict, prefijo: str = '', cap_max: float = CAP_CRECIMIENTO_CARTERA,
+) -> Tuple[float, str]:
     """Calcula crecimiento modelo y etiqueta del método."""
     n = len(totales_hist)
     if n >= 2:
-        crec = _calcular_crec_interanual(totales_hist)
+        crec = _calcular_crec_interanual(totales_hist, cap_max)
         return crec, f"Interanual{' ' + prefijo if prefijo else ''} ({n} ej.)"
     crec = calcular_crecimiento_estadistico(por_mes)
     if crec != 0.0:
@@ -509,7 +519,9 @@ def generar_lineas_ingresos(db: Session, presupuesto: Presupuesto, coeficiente_p
         # ── LÍNEA 2: NUEVA PRODUCCIÓN 2026 ───────────────────────────────────
         if item['total_nueva_prod'] > 0:
             base_limpia_np = item['total_nueva_prod']
-            crec_modelo_np, metodo_np = _metodo_y_crec(hist_nueva.get(key, []), item['por_mes_nueva_prod'], 'NP')
+            crec_modelo_np, metodo_np = _metodo_y_crec(
+                hist_nueva.get(key, []), item['por_mes_nueva_prod'], 'NP', CAP_CRECIMIENTO_NP,
+            )
             crec_final_np = calcular_crecimiento_final(crec_modelo_np, crec_mercado, coeficiente_prudencia, None)
             if crec_modelo_np < 0 and crec_final_np < 0:
                 crec_final_np = 0.0
