@@ -5,7 +5,7 @@ import {
   TeamOutlined, LogoutOutlined, UserOutlined, KeyOutlined,
   BellOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
   SettingOutlined, DatabaseOutlined, DeleteOutlined, RiseOutlined,
-  SafetyCertificateOutlined, BulbOutlined,
+  SafetyCertificateOutlined, BulbOutlined, PieChartOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation, Outlet } from 'react-router-dom'
 import { useAuthStore } from '../../store/authStore'
@@ -30,6 +30,17 @@ const MENU_ITEMS = [
       { key: '/presupuestacion/real', label: 'Seguimiento real' },
       { key: '/presupuestacion/kpis', label: 'KPIs' },
       { key: '/presupuestacion/cuenta-resultados', label: 'Cuenta de Resultados' },
+    ],
+  },
+  {
+    key: 'costes',
+    icon: <PieChartOutlined />,
+    label: 'Costes',
+    children: [
+      { key: '/costes/clasificacion', label: 'Clasificación' },
+      { key: '/costes/imputacion', label: 'Imputación' },
+      { key: '/costes/comparativa', label: 'Comparativa' },
+      { key: '/costes/kpis', label: 'KPIs de costes' },
     ],
   },
   {
@@ -61,6 +72,7 @@ const MENU_ITEMS = [
     children: [
       { key: '/admin/mapeo-cuentas', icon: <DatabaseOutlined />, label: 'Mapeo de cuentas' },
       { key: '/admin/tasas-mercado', icon: <BarChartOutlined />, label: 'Tasas de mercado' },
+      { key: '/admin/auxiliares', icon: <TeamOutlined />, label: 'Auxiliares' },
       { key: '/usuarios', icon: <TeamOutlined />, label: 'Usuarios' },
       { key: '/admin/reset-datos', icon: <DeleteOutlined />, label: 'Limpiar datos' },
     ],

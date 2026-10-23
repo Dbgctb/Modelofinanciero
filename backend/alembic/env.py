@@ -27,6 +27,10 @@ import app.models.kpi
 import app.models.parametros
 import app.models.incidencia
 import app.models.mercado
+import app.models.auxiliares
+import app.models.analitico
+import app.models.cliente
+import app.models.password_reset
 
 config = context.config
 

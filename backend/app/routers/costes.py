@@ -1,5 +1,9 @@
 """
 Router Costes — RF-COS-01 a RF-COS-05.
+
+Organizado por ejercicio (año), no por presupuesto -- funciona con solo
+tener diario real cargado para ese año, sin necesitar ningún presupuesto
+creado (ver services/costes.py).
 """
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,11 +15,11 @@ from ..models.costes import (
     LineaCoste, TipoCoste, TratamientoCoste, DriverReparto,
     MotivoExclusionCoste, EstadoCoste, CLASIFICACION_POR_FAMILIA,
 )
-from ..models.real import DesvIngreso
-from ..services.costes import clasificar_automatico, imputar_costes, resumen_costes, kpis_costes
+from ..models.diario import DiarioApunte, TipoCuenta, EstadoApunte
+from ..services.costes import (
+    clasificar_automatico, imputar_costes, resumen_costes, kpis_costes, generar_lineas_coste,
+)
 from pydantic import BaseModel
-from decimal import Decimal
-import uuid
 
 router = APIRouter(prefix="/costes", tags=["costes"])
 
@@ -31,28 +35,31 @@ class ClasificacionIn(BaseModel):
 
 # ── Clasificación ────────────────────────────────────────────────────────────
 
-@router.post("/{presupuesto_id}/clasificar")
+@router.post("/{ejercicio}/clasificar")
 def clasificar_periodo(
-    presupuesto_id: str,
+    ejercicio: int,
     mes: int = Query(..., ge=1, le=12),
-    ejercicio: int = Query(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_gestor_or_admin),
 ):
-    n = clasificar_automatico(db, presupuesto_id, mes, ejercicio)
+    try:
+        generar_lineas_coste(db, ejercicio, mes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    n = clasificar_automatico(db, ejercicio, mes)
     return {"clasificadas": n}
 
 
-@router.get("/{presupuesto_id}/lineas")
+@router.get("/{ejercicio}/lineas")
 def listar_lineas(
-    presupuesto_id: str,
+    ejercicio: int,
     mes: Optional[int] = Query(None, ge=1, le=12),
     familia: Optional[str] = None,
     estado: Optional[EstadoCoste] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    q = db.query(LineaCoste).filter(LineaCoste.presupuesto_id == presupuesto_id)
+    q = db.query(LineaCoste).filter(LineaCoste.ejercicio == ejercicio)
     if mes is not None:
         q = q.filter(LineaCoste.mes == mes)
     if familia:
@@ -82,9 +89,9 @@ def listar_lineas(
     ]
 
 
-@router.patch("/{presupuesto_id}/lineas/{linea_id}")
+@router.patch("/{ejercicio}/lineas/{linea_id}")
 def actualizar_clasificacion(
-    presupuesto_id: str,
+    ejercicio: int,
     linea_id: str,
     body: ClasificacionIn,
     db: Session = Depends(get_db),
@@ -92,7 +99,7 @@ def actualizar_clasificacion(
 ):
     linea = db.query(LineaCoste).filter(
         LineaCoste.id == linea_id,
-        LineaCoste.presupuesto_id == presupuesto_id,
+        LineaCoste.ejercicio == ejercicio,
     ).first()
     if not linea:
         raise HTTPException(404, "Línea no encontrada")
@@ -122,45 +129,62 @@ def actualizar_clasificacion(
 
 # ── Imputación ───────────────────────────────────────────────────────────────
 
-@router.post("/{presupuesto_id}/imputar")
+@router.post("/{ejercicio}/imputar")
 def imputar(
-    presupuesto_id: str,
+    ejercicio: int,
     meses: List[int] = Query(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_gestor_or_admin),
 ):
-    n = imputar_costes(db, presupuesto_id, meses)
+    n = imputar_costes(db, ejercicio, meses)
     return {"imputadas": n}
 
 
 # ── Comparativa real vs presupuesto ─────────────────────────────────────────
 
-@router.get("/{presupuesto_id}/comparativa")
+@router.get("/{ejercicio}/comparativa")
 def comparativa(
-    presupuesto_id: str,
+    ejercicio: int,
     meses: List[int] = Query(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return resumen_costes(db, presupuesto_id, meses)
+    return resumen_costes(db, ejercicio, meses)
 
 
 # ── KPIs de costes ───────────────────────────────────────────────────────────
 
-@router.get("/{presupuesto_id}/kpis")
+@router.get("/{ejercicio}/kpis")
 def kpis(
-    presupuesto_id: str,
+    ejercicio: int,
     meses: List[int] = Query(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Ingreso neto = ingresos reales - cesiones (desde DesvIngreso)
-    ing_rows = db.query(DesvIngreso).filter(
-        DesvIngreso.presupuesto_id == presupuesto_id,
-        DesvIngreso.mes.in_(meses),
+    # Ingreso neto real, directamente del diario (sin depender de presupuesto)
+    apuntes = db.query(DiarioApunte).filter(
+        DiarioApunte.ejercicio == ejercicio,
+        DiarioApunte.mes.in_(meses),
+        DiarioApunte.tipo_cuenta == TipoCuenta.INGRESO,
+        DiarioApunte.estado == EstadoApunte.CORRECTO,
     ).all()
-    ing_neto = sum(float(r.real) for r in ing_rows)
-    return kpis_costes(db, presupuesto_id, meses, ing_neto)
+    ing_neto = sum(float(ap.haber - ap.debe) for ap in apuntes)
+    return kpis_costes(db, ejercicio, meses, ing_neto)
+
+
+# ── Años disponibles (con diario de gastos cargado) ──────────────────────────
+
+@router.get("/anyos-disponibles")
+def anyos_disponibles(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from sqlalchemy import distinct
+    anyos = db.query(distinct(DiarioApunte.ejercicio)).filter(
+        DiarioApunte.tipo_cuenta == TipoCuenta.GASTO,
+        DiarioApunte.estado == EstadoApunte.CORRECTO,
+    ).order_by(DiarioApunte.ejercicio.desc()).all()
+    return [a[0] for a in anyos]
 
 
 # ── Familias disponibles ─────────────────────────────────────────────────────

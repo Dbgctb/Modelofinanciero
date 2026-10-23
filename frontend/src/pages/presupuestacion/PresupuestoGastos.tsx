@@ -645,7 +645,7 @@ export default function PresupuestoGastos() {
           title={<span style={{ fontSize: 13, fontWeight: 600 }}>Cesiones a auxiliares — comisiones sobre ingresos presupuestados</span>}
           extra={
             <Space size={4}>
-              <Tooltip title="Genera o actualiza las filas de cesiones desde el presupuesto de ingresos. Mantiene los parámetros ya configurados.">
+              <Tooltip title="Genera o actualiza las filas de cesiones desde el presupuesto de ingresos. Rellena el % comisión y el % retención desde el catálogo de Administración → Auxiliares para los auxiliares sin configurar. Mantiene los parámetros ya configurados.">
                 <Button size="small" icon={<SyncOutlined />} onClick={() => generarCes.mutate()} loading={generarCes.isPending}>
                   Sincronizar desde ingresos
                 </Button>

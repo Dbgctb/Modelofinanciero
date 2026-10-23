@@ -6,7 +6,8 @@ export const presupuestoApi = {
   detalle: (id: string) => api.get(`/presupuesto/${id}`),
 
   // Ingresos
-  generarIngresos: (id: string) => api.post(`/presupuesto/${id}/ingresos/generar`),
+  generarIngresos: (id: string, coeficiente_prudencia: number) =>
+    api.post(`/presupuesto/${id}/ingresos/generar`, { coeficiente_prudencia }),
   listarIngresos: (id: string) => api.get(`/presupuesto/${id}/ingresos`),
   actualizarIngreso: (presupuestoId: string, lineaId: string, datos: object) =>
     api.patch(`/presupuesto/${presupuestoId}/ingresos/${lineaId}`, datos),

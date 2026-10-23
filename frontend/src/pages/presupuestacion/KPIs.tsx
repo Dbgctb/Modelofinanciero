@@ -62,9 +62,13 @@ function KpiCard({ kpi, umbralesMap }: { kpi: any; umbralesMap: Map<string, any>
   const defUmbral = UMBRALES_DEFAULT_FRONT[kpi.codigo]
   const umbral = dbUmbral || defUmbral
 
-  // KPIs puramente informativos (montos absolutos €) no tienen meta significativa
-  const esInformativo = kpi.nombre.toLowerCase().includes('presupuestados') ||
-                        kpi.nombre.toLowerCase().includes('propios presupuestados')
+  // KPIs sin umbral comparable en el modo actual (p.ej. KPI-08 en modo presupuesto:
+  // "Gastos operativos propios (€)", sin datos reales todavía, con el umbral definido
+  // en puntos porcentuales) no tienen meta significativa. Lo decide el backend
+  // (kpi.informativo), no se adivina por el texto del nombre -- bug real reportado en
+  // vivo 2026-10-17: KPI-08 mostraba "Meta: 5,00 €" (el umbral de 5 puntos
+  // porcentuales mal etiquetado como euros) junto a un valor real en miles de euros.
+  const esInformativo = !!kpi.informativo
 
   // Para invertidos: la meta visible es el límite amarillo (no exceder)
   // Para normales: la meta es el umbral verde (alcanzar o superar)

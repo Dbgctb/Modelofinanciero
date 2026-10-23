@@ -1,18 +1,20 @@
 import client from './client'
 
 export const costesApi = {
-  clasificar: (presupuestoId: string, mes: number, ejercicio: number) =>
-    client.post(`/costes/${presupuestoId}/clasificar`, null, { params: { mes, ejercicio } }),
-  listarLineas: (presupuestoId: string, params?: { mes?: number; familia?: string; estado?: string }) =>
-    client.get(`/costes/${presupuestoId}/lineas`, { params }),
-  actualizarLinea: (presupuestoId: string, lineaId: string, data: any) =>
-    client.patch(`/costes/${presupuestoId}/lineas/${lineaId}`, data),
-  imputar: (presupuestoId: string, meses: number[]) =>
-    client.post(`/costes/${presupuestoId}/imputar`, null, { params: { meses } }),
-  comparativa: (presupuestoId: string, meses: number[]) =>
-    client.get(`/costes/${presupuestoId}/comparativa`, { params: { meses } }),
-  kpis: (presupuestoId: string, meses: number[]) =>
-    client.get(`/costes/${presupuestoId}/kpis`, { params: { meses } }),
+  clasificar: (ejercicio: number, mes: number) =>
+    client.post(`/costes/${ejercicio}/clasificar`, null, { params: { mes } }),
+  listarLineas: (ejercicio: number, params?: { mes?: number; familia?: string; estado?: string }) =>
+    client.get(`/costes/${ejercicio}/lineas`, { params }),
+  actualizarLinea: (ejercicio: number, lineaId: string, data: any) =>
+    client.patch(`/costes/${ejercicio}/lineas/${lineaId}`, data),
+  imputar: (ejercicio: number, meses: number[]) =>
+    client.post(`/costes/${ejercicio}/imputar`, null, { params: { meses } }),
+  comparativa: (ejercicio: number, meses: number[]) =>
+    client.get(`/costes/${ejercicio}/comparativa`, { params: { meses } }),
+  kpis: (ejercicio: number, meses: number[]) =>
+    client.get(`/costes/${ejercicio}/kpis`, { params: { meses } }),
+  anyosDisponibles: () =>
+    client.get('/costes/anyos-disponibles'),
   familiasClasificacion: () =>
     client.get('/costes/familias-clasificacion'),
 }

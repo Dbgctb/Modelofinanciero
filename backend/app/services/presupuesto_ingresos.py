@@ -380,7 +380,15 @@ def _metodo_y_crec(totales_hist: List, por_mes: Dict, prefijo: str = '') -> Tupl
     return 0.0, "Sin datos (0%)"
 
 
-def generar_lineas_ingresos(db: Session, presupuesto: Presupuesto) -> int:
+def generar_lineas_ingresos(db: Session, presupuesto: Presupuesto, coeficiente_prudencia: float) -> int:
+    """
+    coeficiente_prudencia: fracción (0-1) del exceso de mercado sobre el modelo que se
+    incorpora al crecimiento final (ver calcular_crecimiento_final). Lo decide el usuario
+    desde la pantalla al generar -- no hay un valor por defecto hardcodeado aquí: antes
+    el cálculo usaba un 0.5 fijo en el código mientras la línea guardaba un 0.75/1.0 que
+    nunca se usó para calcular nada, así que el "Coef." que se veía en pantalla no era el
+    que realmente se había aplicado (bug real reportado en vivo 2026-10-17).
+    """
     t0 = time.monotonic()
 
     db.query(PresupuestoIngreso).filter(
@@ -464,11 +472,16 @@ def generar_lineas_ingresos(db: Session, presupuesto: Presupuesto) -> int:
         base_limpia = item['total_combinado'] - atip['importe_excluible']
 
         crec_modelo, metodo = _metodo_y_crec(hist_total.get(key, []), item['por_mes_total'])
-        crec_final = calcular_crecimiento_final(crec_modelo, crec_mercado, 0.5, None)
+        crec_final = calcular_crecimiento_final(crec_modelo, crec_mercado, coeficiente_prudencia, None)
         if crec_final < 0:
             crec_final = 0.0
             metodo = metodo + ' [suelo 0%]'
-        importes = proyectar_importes(base_limpia, tasa_caida, crec_final, estac_global)
+        # Los atípicos se excluyen de la base de crecimiento (no hay estadística fiable
+        # sobre un importe puntual) pero siguen siendo cartera real: la caída SÍ se les
+        # aplica (mismo riesgo de anulación que el resto), el crecimiento NO.
+        importes_base = proyectar_importes(base_limpia, tasa_caida, crec_final, estac_global)
+        importes_atip = proyectar_importes(atip['importe_excluible'], tasa_caida, 0.0, estac_global)
+        importes = [round(a + b, 2) for a, b in zip(importes_base, importes_atip)]
 
         lineas_data.append({
             'id': uuid.uuid4(),
@@ -485,7 +498,7 @@ def generar_lineas_ingresos(db: Session, presupuesto: Presupuesto) -> int:
             'tasa_caida': tasa_caida,
             'crecimiento_modelo': crec_modelo,
             'crecimiento_mercado': crec_mercado,
-            'coeficiente_prudencia': 0.75,
+            'coeficiente_prudencia': coeficiente_prudencia,
             'crecimiento_final': crec_final,
             'importes_mensuales': importes,
             'total_anual': round(sum(importes), 2),
@@ -497,7 +510,7 @@ def generar_lineas_ingresos(db: Session, presupuesto: Presupuesto) -> int:
         if item['total_nueva_prod'] > 0:
             base_limpia_np = item['total_nueva_prod']
             crec_modelo_np, metodo_np = _metodo_y_crec(hist_nueva.get(key, []), item['por_mes_nueva_prod'], 'NP')
-            crec_final_np = calcular_crecimiento_final(crec_modelo_np, crec_mercado, 0.5, None)
+            crec_final_np = calcular_crecimiento_final(crec_modelo_np, crec_mercado, coeficiente_prudencia, None)
             if crec_modelo_np < 0 and crec_final_np < 0:
                 crec_final_np = 0.0
                 metodo_np = metodo_np + ' [suelo 0%]'
@@ -518,7 +531,7 @@ def generar_lineas_ingresos(db: Session, presupuesto: Presupuesto) -> int:
                 'tasa_caida': 0.0,
                 'crecimiento_modelo': crec_modelo_np,
                 'crecimiento_mercado': crec_mercado,
-                'coeficiente_prudencia': 1.0,
+                'coeficiente_prudencia': coeficiente_prudencia,
                 'crecimiento_final': crec_final_np,
                 'importes_mensuales': importes_np,
                 'total_anual': round(sum(importes_np), 2),
@@ -592,10 +605,16 @@ def recalcular_linea(db: Session, linea: PresupuestoIngreso) -> PresupuestoIngre
             estac = [round(pm.get(m, 0.0) / tot, 6) for m in MESES]
     linea.estacionalidad = estac
 
-    importes = proyectar_importes(
+    # Misma regla que generar_lineas_ingresos: la caída aplica a toda la base
+    # (limpia + atípicos), el crecimiento solo a la parte limpia.
+    importes_base = proyectar_importes(
         float(linea.ingreso_base_limpio or 0), float(linea.tasa_caida or 0),
         crec_final, estac,
     )
+    importes_atip = proyectar_importes(
+        float(linea.atipicos_excluidos or 0), float(linea.tasa_caida or 0), 0.0, estac,
+    )
+    importes = [round(a + b, 2) for a, b in zip(importes_base, importes_atip)]
     linea.importes_mensuales = importes
     linea.total_anual = round(sum(importes), 2)
     db.commit()
@@ -645,10 +664,14 @@ def aplicar_coeficiente_masivo(
             coeficiente_prudencia,
             float(linea.crecimiento_manual) if linea.crecimiento_manual is not None else None,
         )
-        importes = proyectar_importes(
+        importes_base = proyectar_importes(
             float(linea.ingreso_base_limpio or 0), float(linea.tasa_caida or 0),
             float(linea.crecimiento_final), linea.estacionalidad or [],
         )
+        importes_atip = proyectar_importes(
+            float(linea.atipicos_excluidos or 0), float(linea.tasa_caida or 0), 0.0, linea.estacionalidad or [],
+        )
+        importes = [round(a + b, 2) for a, b in zip(importes_base, importes_atip)]
         linea.importes_mensuales = importes
         linea.total_anual = round(sum(importes), 2)
 
@@ -813,7 +836,8 @@ def calcular_metodologia(lineas: list) -> dict:
         return {}
     base_bruta = sum(float(l.ingreso_base_anual or 0) for l in lineas)
     base_limpia = sum(float(l.ingreso_base_limpio or 0) for l in lineas)
-    caida_total = sum(float(l.ingreso_base_limpio or 0) * float(l.tasa_caida or 0) / 100 for l in lineas)
+    # La caída aplica a toda la base (limpia + atípicos), ver generar_lineas_ingresos.
+    caida_total = sum(float(l.ingreso_base_anual or 0) * float(l.tasa_caida or 0) / 100 for l in lineas)
     total_anual = sum(float(l.total_anual or 0) for l in lineas)
 
     def media_pond(campo):

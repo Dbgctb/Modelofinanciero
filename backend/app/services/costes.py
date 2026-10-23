@@ -1,6 +1,13 @@
 """
 Servicio de clasificación e imputación de costes.
 RF-COS-01 a RF-COS-05.
+
+Organizado por ejercicio (año natural), no por presupuesto: los costes se
+calculan directamente del diario real cargado, para poder analizarlos aunque
+no exista ningún presupuesto para ese año todavía. Si existe un Presupuesto
+para el mismo ejercicio, se usa automáticamente para rellenar
+importe_presupuesto (comparación) y las bases de reparto de comisión; si no
+existe, esas partes quedan a 0 y solo se ve el real.
 """
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
@@ -9,14 +16,99 @@ from ..models.costes import (
     LineaCoste, TipoCoste, TratamientoCoste, DriverReparto,
     EstadoCoste, CLASIFICACION_POR_FAMILIA,
 )
-from ..models.real import DesvIngreso
-from ..models.presupuesto import PresupuestoIngreso
+from ..models.presupuesto import Presupuesto, PresupuestoGasto
+from ..models.diario import DiarioApunte, TipoCuenta, EstadoApunte
 
 
-def clasificar_automatico(db: Session, presupuesto_id: str, mes: int, ejercicio: int) -> int:
+def generar_lineas_coste(db: Session, ejercicio: int, mes: int) -> int:
+    """
+    Crea/actualiza las líneas de coste de un mes directamente desde el diario
+    real cargado (DiarioApunte, cuentas de gasto) -- no depende de ningún
+    presupuesto, solo de que haya diario cargado para ese mes/ejercicio.
+
+    Si existe un Presupuesto para este mismo ejercicio, se usa su
+    PresupuestoGasto para rellenar importe_presupuesto (solo para poder
+    comparar en pantalla); si no existe, importe_presupuesto queda a 0.
+
+    Preserva las líneas que el usuario ya clasificó a mano (clasificacion_automatica
+    == False); solo regenera las que siguen en automático, igual que
+    presupuesto_gastos.generar_lineas_gastos con sus propias líneas.
+    """
+    apuntes = db.query(DiarioApunte).filter(
+        DiarioApunte.ejercicio == ejercicio,
+        DiarioApunte.mes == mes,
+        DiarioApunte.tipo_cuenta == TipoCuenta.GASTO,
+        DiarioApunte.estado == EstadoApunte.CORRECTO,
+    ).all()
+    if not apuntes:
+        raise ValueError(
+            f"No hay diario de gastos cargado para el mes {mes} del ejercicio {ejercicio}."
+        )
+
+    real_por_cuenta: Dict[str, Dict] = {}
+    for ap in apuntes:
+        cta = ap.numero_cuenta or 'SIN_CUENTA'
+        if cta not in real_por_cuenta:
+            real_por_cuenta[cta] = {'familia': ap.familia_gasto or None, 'descripcion': None, 'real': 0.0}
+        real_por_cuenta[cta]['real'] += float(ap.debe - ap.haber)
+        if not real_por_cuenta[cta]['descripcion'] and ap.descripcion_cuenta:
+            real_por_cuenta[cta]['descripcion'] = ap.descripcion_cuenta
+
+    # Presupuesto del mismo ejercicio, si existe -- solo para comparar (opcional)
+    presupuesto = db.query(Presupuesto).filter(Presupuesto.ejercicio == ejercicio).first()
+    presup_por_cuenta: Dict[str, float] = {}
+    if presupuesto:
+        for l in db.query(PresupuestoGasto).filter(PresupuestoGasto.presupuesto_id == presupuesto.id).all():
+            if not l.numero_cuenta:
+                continue
+            importes_ef = [
+                (l.importes_manuales[i] if l.importes_manuales and l.importes_manuales[i] is not None
+                 else (l.importes_mensuales[i] if l.importes_mensuales and i < len(l.importes_mensuales) else 0))
+                for i in range(12)
+            ]
+            presup_por_cuenta[l.numero_cuenta] = importes_ef[mes - 1] if len(importes_ef) >= mes else 0
+
+    db.query(LineaCoste).filter(
+        LineaCoste.ejercicio == ejercicio,
+        LineaCoste.mes == mes,
+        LineaCoste.clasificacion_automatica == True,
+    ).delete()
+    db.flush()
+
+    ya_manuales = {
+        l.numero_cuenta
+        for l in db.query(LineaCoste).filter(
+            LineaCoste.ejercicio == ejercicio,
+            LineaCoste.mes == mes,
+        ).all()
+    }
+
+    creadas = 0
+    for cta, datos in real_por_cuenta.items():
+        if cta in ya_manuales:
+            continue
+        db.add(LineaCoste(
+            presupuesto_id=presupuesto.id if presupuesto else None,
+            mes=mes,
+            ejercicio=ejercicio,
+            numero_cuenta=cta,
+            descripcion_cuenta=datos['descripcion'],
+            familia_gasto=datos['familia'],
+            importe_real=round(datos['real'], 2),
+            importe_presupuesto=round(presup_por_cuenta.get(cta, 0.0), 2),
+            clasificacion_automatica=True,
+            estado=EstadoCoste.PENDIENTE,
+        ))
+        creadas += 1
+
+    db.commit()
+    return creadas
+
+
+def clasificar_automatico(db: Session, ejercicio: int, mes: int) -> int:
     """Aplica clasificación automática por familia a líneas pendientes. Devuelve n clasificadas."""
     lineas = db.query(LineaCoste).filter(
-        LineaCoste.presupuesto_id == presupuesto_id,
+        LineaCoste.ejercicio == ejercicio,
         LineaCoste.mes == mes,
         LineaCoste.estado == EstadoCoste.PENDIENTE,
     ).all()
@@ -42,25 +134,32 @@ def clasificar_automatico(db: Session, presupuesto_id: str, mes: int, ejercicio:
 
 
 def _calcular_bases_driver(
-    db: Session, presupuesto_id: str, meses: List[int]
+    db: Session, ejercicio: int, meses: List[int]
 ) -> Dict[str, Dict[str, float]]:
-    """Calcula las bases de reparto para cada driver por compañía/auxiliar/ramo."""
-    ing_rows = db.query(DesvIngreso).filter(
-        DesvIngreso.presupuesto_id == presupuesto_id,
-        DesvIngreso.mes.in_(meses),
+    """
+    Calcula las bases de reparto para cada driver por compañía, directamente
+    del diario real de ingresos (mismo cálculo que
+    seguimiento_real._calcular_desv_ingresos, sin depender de que exista un
+    presupuesto ni de que el mes esté cerrado en Seguimiento Real).
+    """
+    apuntes = db.query(DiarioApunte).filter(
+        DiarioApunte.ejercicio == ejercicio,
+        DiarioApunte.mes.in_(meses),
+        DiarioApunte.tipo_cuenta == TipoCuenta.INGRESO,
+        DiarioApunte.estado == EstadoApunte.CORRECTO,
     ).all()
 
     bases: Dict[str, Dict[str, float]] = {
         "comision_contable": {},
         "nueva_produccion": {},
-        "numero_polizas": {},
     }
 
-    for r in ing_rows:
-        dim = r.compania or "Sin compañía"
-        bases["comision_contable"][dim] = bases["comision_contable"].get(dim, 0.0) + float(r.real)
-        if r.tipo_negocio == "nueva_produccion":
-            bases["nueva_produccion"][dim] = bases["nueva_produccion"].get(dim, 0.0) + float(r.real)
+    for ap in apuntes:
+        dim = ap.compania or "Sin compañía"
+        importe = float(ap.haber - ap.debe)
+        bases["comision_contable"][dim] = bases["comision_contable"].get(dim, 0.0) + importe
+        if ap.tipo_negocio == "nueva_produccion":
+            bases["nueva_produccion"][dim] = bases["nueva_produccion"].get(dim, 0.0) + importe
 
     return bases
 
@@ -72,10 +171,10 @@ def _normalizar(d: Dict[str, float]) -> Dict[str, float]:
     return {k: round(v / total, 6) for k, v in d.items()}
 
 
-def imputar_costes(db: Session, presupuesto_id: str, meses: List[int]) -> int:
+def imputar_costes(db: Session, ejercicio: int, meses: List[int]) -> int:
     """Reparte costes indirectos entre dimensiones según driver. Devuelve n líneas imputadas."""
     lineas = db.query(LineaCoste).filter(
-        LineaCoste.presupuesto_id == presupuesto_id,
+        LineaCoste.ejercicio == ejercicio,
         LineaCoste.mes.in_(meses),
         LineaCoste.tratamiento == TratamientoCoste.INDIRECTO,
         LineaCoste.estado == EstadoCoste.CLASIFICADO,
@@ -84,7 +183,7 @@ def imputar_costes(db: Session, presupuesto_id: str, meses: List[int]) -> int:
     if not lineas:
         return 0
 
-    bases = _calcular_bases_driver(db, presupuesto_id, meses)
+    bases = _calcular_bases_driver(db, ejercicio, meses)
     pct_comision = _normalizar(bases["comision_contable"])
     pct_nueva = _normalizar(bases["nueva_produccion"])
 
@@ -104,7 +203,7 @@ def imputar_costes(db: Session, presupuesto_id: str, meses: List[int]) -> int:
 
     # Costes directos: se imputan 100% a su propia compañía/familia (sin driver)
     directos = db.query(LineaCoste).filter(
-        LineaCoste.presupuesto_id == presupuesto_id,
+        LineaCoste.ejercicio == ejercicio,
         LineaCoste.mes.in_(meses),
         LineaCoste.tratamiento == TratamientoCoste.DIRECTO,
         LineaCoste.estado == EstadoCoste.CLASIFICADO,
@@ -119,11 +218,11 @@ def imputar_costes(db: Session, presupuesto_id: str, meses: List[int]) -> int:
 
 
 def resumen_costes(
-    db: Session, presupuesto_id: str, meses: List[int]
+    db: Session, ejercicio: int, meses: List[int]
 ) -> Dict:
     """Resumen de costes reales vs presupuesto por familia y tratamiento."""
     lineas = db.query(LineaCoste).filter(
-        LineaCoste.presupuesto_id == presupuesto_id,
+        LineaCoste.ejercicio == ejercicio,
         LineaCoste.mes.in_(meses),
     ).all()
 
@@ -162,10 +261,10 @@ def resumen_costes(
 
 
 def kpis_costes(
-    db: Session, presupuesto_id: str, meses: List[int], ing_neto: float
+    db: Session, ejercicio: int, meses: List[int], ing_neto: float
 ) -> List[Dict]:
     """KPIs de costes: ratio coste/ingreso, % directo vs indirecto, coste por familia."""
-    r = resumen_costes(db, presupuesto_id, meses)
+    r = resumen_costes(db, ejercicio, meses)
     totales = r["totales"]
     coste_operativo = totales["directo"] + totales["indirecto"]
     ratio = round((coste_operativo / ing_neto) * 100, 2) if ing_neto else 0.0

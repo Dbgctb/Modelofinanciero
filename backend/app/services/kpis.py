@@ -206,10 +206,17 @@ def calcular_kpis(db: Session, presupuesto: Presupuesto, hasta_mes: Optional[int
 
     resultado_base = []
     for codigo, nombre, valor in kpis_base:
-        sem = SemaforoColor.VERDE if codigo in kpis_informativos else _semaforo(codigo, valor, umbrales)
+        es_informativo = codigo in kpis_informativos
+        sem = SemaforoColor.VERDE if es_informativo else _semaforo(codigo, valor, umbrales)
         resultado_base.append({
             "codigo": codigo, "nombre": nombre, "valor": valor,
             "semaforo": sem.value, "dimension": None, "mes": ultimo_mes,
+            # Explícito para que el frontend no tenga que adivinarlo por el texto del
+            # nombre: KPI-08 cambia de "% cumplimiento de gastos" (con umbral real) a
+            # "Gastos operativos propios (€)" en modo presupuesto (sin datos reales
+            # todavía) -- el umbral de KPI-08 está en puntos porcentuales y no tiene
+            # sentido aplicado a un importe en euros.
+            "informativo": es_informativo,
         })
 
     # ── KPI-07: Ingreso neto por auxiliar ─────────────────────────────────
@@ -304,6 +311,7 @@ def calcular_kpis(db: Session, presupuesto: Presupuesto, hasta_mes: Optional[int
             presupuesto_id=presupuesto.id,
             mes=k["mes"], kpi_codigo=k["codigo"], kpi_nombre=k["nombre"],
             valor=k["valor"], semaforo=SemaforoColor(k["semaforo"]), dimension=k["dimension"],
+            informativo=k.get("informativo", False),
         ))
     db.commit()
 

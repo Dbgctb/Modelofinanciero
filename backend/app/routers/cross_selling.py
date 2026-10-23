@@ -541,7 +541,7 @@ async def upload_clientes(
 def create_accion(
     data: AccionIn,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_gestor_or_admin),
 ):
     accion = AccionComercial(
         tipo=data.tipo,
@@ -656,7 +656,7 @@ def update_accion(
     accion_id: UUID,
     data: AccionUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_gestor_or_admin),
 ):
     from datetime import datetime, timezone
     accion = db.query(AccionComercial).filter(AccionComercial.id == accion_id).first()

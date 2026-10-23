@@ -125,7 +125,7 @@ export default function PresupuestoIngresos() {
   })
 
   const generar = useMutation({
-    mutationFn: () => presupuestoApi.generarIngresos(presupuestoId!),
+    mutationFn: () => presupuestoApi.generarIngresos(presupuestoId!, coefValor),
     onSuccess: (res) => {
       const tiempo_segundos = startTimeGenerarRef.current
         ? Math.round((Date.now() - startTimeGenerarRef.current) / 1000)
@@ -271,11 +271,12 @@ export default function PresupuestoIngresos() {
   // Resumen desde lineas
   const baseCartera     = (lineas as any[]).reduce((s, l) => l.tipo_negocio === 'cartera'          ? s + (l.ingreso_base_anual  || 0) : s, 0)
   const baseNuevaProd   = (lineas as any[]).reduce((s, l) => l.tipo_negocio === 'nueva_produccion' ? s + (l.ingreso_base_anual  || 0) : s, 0)
-  const baseLimpiaCartera = (lineas as any[]).reduce((s, l) => l.tipo_negocio === 'cartera'        ? s + (l.ingreso_base_limpio || 0) : s, 0)
-  // caída aplicada sobre la base limpia (sin atípicos)
+  // La caída aplica a TODA la base (limpia + atípicos): los atípicos son cartera real,
+  // sujeta al mismo riesgo de anulación, aunque luego no se les aplique crecimiento
+  // (ver generar_lineas_ingresos en el backend).
   const caidaCarteraVal = (lineas as any[]).reduce((s, l) => l.tipo_negocio === 'cartera'
-    ? s + (l.ingreso_base_limpio || 0) * (l.tasa_caida || 0) / 100 : s, 0)
-  // superviviente real = base_limpia × (1 − tasa_caida%) — calculado en backend
+    ? s + (l.ingreso_base_anual || 0) * (l.tasa_caida || 0) / 100 : s, 0)
+  // superviviente real = ingreso_base_anual × (1 − tasa_caida%) — calculado en backend
   const supervivienteCartera = (lineas as any[]).reduce((s, l) => l.tipo_negocio === 'cartera'
     ? s + (l.base_superviviente || 0) : s, 0)
   const totalPresupuestoCartera = (lineas as any[]).reduce((s, l) => l.tipo_negocio === 'cartera'          ? s + (l.total_anual || 0) : s, 0)
@@ -300,9 +301,15 @@ export default function PresupuestoIngresos() {
 
   const atipicosCartera = (lineas as any[]).reduce((s: number, l: any) => l.tipo_negocio === 'cartera'          ? s + (l.atipicos_excluidos || 0) : s, 0)
   const atipicosNP      = (lineas as any[]).reduce((s: number, l: any) => l.tipo_negocio === 'nueva_produccion' ? s + (l.atipicos_excluidos || 0) : s, 0)
-  // % caída relativo a la base limpia → da exactamente la tasa configurada
-  const pctCaidaCartera = baseLimpiaCartera > 0 ? (caidaCarteraVal / baseLimpiaCartera * 100) : 0
-  const pctCaidaTotal   = (baseLimpiaCartera + baseNuevaProd) > 0 ? (caidaTotal / (baseLimpiaCartera + baseNuevaProd) * 100) : 0
+  // % caída relativo a la base BRUTA (la caída aplica a limpia + atípicos por igual)
+  // → da exactamente la tasa configurada. La caída solo se aplica a cartera (NP nunca
+  // tiene caída, es negocio nuevo sin nada que anular todavía), así que el % del Total
+  // tiene que usar el mismo denominador que el de Cartera -- si se dividiera por
+  // cartera+NP, el % saldría diluido e inferior al real por tener más base en el
+  // denominador sin más caída en el numerador (bug real reportado en vivo 2026-10-17:
+  // 12,2% en Cartera vs 10,3% en Total con la misma caída absoluta).
+  const pctCaidaCartera = baseCartera > 0 ? (caidaCarteraVal / baseCartera * 100) : 0
+  const pctCaidaTotal   = pctCaidaCartera
 
   // % desviación = (Final 2026 - Base 2025) / Base 2025
   const base2025Cartera = baseCartera - baseNuevaProd   // cartera real 2025 (sin NP)
@@ -616,6 +623,11 @@ export default function PresupuestoIngresos() {
           </Tooltip>
           <Divider type="vertical" />
           {presupuestoId && !ingresosAprobados && (
+            <Tooltip title={coefValor === 0 ? 'Coeficiente de prudencia: solo modelo estadístico' : coefValor === 1 ? 'Coeficiente de prudencia: acepta mercado íntegro' : `Coeficiente de prudencia: absorbe ${Math.round(coefValor * 100).toLocaleString('es-ES')}% del exceso de mercado sobre el modelo`}>
+              <InputNumber min={0} max={1} step={0.05} size="small" style={{ width: 64 }} value={coefValor} onChange={(v) => setCoefValor(v ?? 0.75)} />
+            </Tooltip>
+          )}
+          {presupuestoId && !ingresosAprobados && (
             <Button
               size="small"
               icon={generar.isPending ? <LoadingOutlined spin /> : <ThunderboltOutlined />}
@@ -777,7 +789,7 @@ export default function PresupuestoIngresos() {
                     Base {anoBase}
                   </th>
                   <th style={{ padding: '10px 16px', background: '#fafafa', borderBottom: '2px solid #e8e8e8', textAlign: 'right', color: '#595959', fontWeight: 600, fontSize: 12 }}>
-                    <Tooltip title={`Punto de partida ${anoPpto}: la NP ${anoBase} pasa a ser cartera. Atípicos excluidos del cálculo: ${fmtK(atipicosCartera + atipicosNP)}.`}>
+                    <Tooltip title={`Punto de partida ${anoPpto}: la NP ${anoBase} pasa a ser cartera. Incluye ${fmtK(atipicosCartera + atipicosNP)} de importes puntuales (prima única, regularización...): no se usan para calcular el % de crecimiento, pero sí están sujetos a la caída por anulaciones, igual que el resto de la cartera.`}>
                       <span style={{ borderBottom: '1px dashed #bfbfbf', cursor: 'help' }}>Inicial {anoPpto}</span>
                     </Tooltip>
                   </th>

@@ -16,9 +16,14 @@ import PresupuestoIngresos from './pages/presupuestacion/PresupuestoIngresos'
 import PresupuestoGastos from './pages/presupuestacion/PresupuestoGastos'
 import Tesoreria from './pages/presupuestacion/Tesoreria'
 import SeguimientoReal from './pages/presupuestacion/SeguimientoReal'
+import ClasificacionCostes from './pages/costes/Clasificacion'
+import ImputacionCostes from './pages/costes/Imputacion'
+import ComparativaCostes from './pages/costes/Comparativa'
+import KPIsCostes from './pages/costes/KPIsCostes'
 import MapeoCuentas from './pages/admin/Mapeo'
 import Usuarios from './pages/admin/Usuarios'
 import TasasMercado from './pages/admin/TasasMercado'
+import Auxiliares from './pages/admin/Auxiliares'
 import ResetDatos from './pages/admin/ResetDatos'
 import KPIs from './pages/presupuestacion/KPIs'
 import CuentaResultados from './pages/presupuestacion/CuentaResultados'
@@ -114,6 +119,12 @@ export default function App() {
                 <Route path="presupuestacion/kpis" element={<KPIs />} />
                 <Route path="presupuestacion/cuenta-resultados" element={<CuentaResultados />} />
 
+                {/* Módulo de Costes */}
+                <Route path="costes/clasificacion" element={<ClasificacionCostes />} />
+                <Route path="costes/imputacion" element={<ImputacionCostes />} />
+                <Route path="costes/comparativa" element={<ComparativaCostes />} />
+                <Route path="costes/kpis" element={<KPIsCostes />} />
+
                 {/* Panel de control — cuadre */}
                 <Route path="panel-control" element={<PanelControl />} />
 
@@ -154,6 +165,14 @@ export default function App() {
                   element={
                     <ProtectedRoute allowedRoles={['admin']}>
                       <TasasMercado />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="admin/auxiliares"
+                  element={
+                    <ProtectedRoute allowedRoles={['admin']}>
+                      <Auxiliares />
                     </ProtectedRoute>
                   }
                 />

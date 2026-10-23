@@ -8,7 +8,6 @@ import {
   ClockCircleOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { presupuestoApi } from '../../api/presupuesto'
 import { costesApi } from '../../api/costes'
 import { apiError } from '../../utils/errorHandler'
 
@@ -57,21 +56,20 @@ const fmt = (v: number) => v?.toLocaleString('es-ES', { minimumFractionDigits: 2
 
 export default function Clasificacion() {
   const qc = useQueryClient()
-  const [presupuestoId, setPresupuestoId] = useState<string | null>(null)
   const [ejercicio, setEjercicio] = useState<number | null>(null)
   const [mes, setMes] = useState<number>(1)
   const [lineaEdit, setLineaEdit] = useState<any>(null)
   const [form] = Form.useForm()
 
-  const { data: presupuestos = [] } = useQuery({
-    queryKey: ['presupuestos'],
-    queryFn: () => presupuestoApi.listar().then(r => r.data),
+  const { data: anyos = [] } = useQuery({
+    queryKey: ['costes-anyos'],
+    queryFn: () => costesApi.anyosDisponibles().then(r => r.data),
   })
 
   const { data: lineas = [], isLoading } = useQuery({
-    queryKey: ['costes-lineas', presupuestoId, mes],
-    queryFn: () => costesApi.listarLineas(presupuestoId!, { mes }).then(r => r.data),
-    enabled: !!presupuestoId,
+    queryKey: ['costes-lineas', ejercicio, mes],
+    queryFn: () => costesApi.listarLineas(ejercicio!, { mes }).then(r => r.data),
+    enabled: !!ejercicio,
   })
 
   const { data: familias = [] } = useQuery({
@@ -80,29 +78,23 @@ export default function Clasificacion() {
   })
 
   const clasificar = useMutation({
-    mutationFn: () => costesApi.clasificar(presupuestoId!, mes, ejercicio!),
+    mutationFn: () => costesApi.clasificar(ejercicio!, mes),
     onSuccess: (r) => {
       message.success(`${r.data.clasificadas} líneas clasificadas automáticamente`)
-      qc.invalidateQueries({ queryKey: ['costes-lineas', presupuestoId, mes] })
+      qc.invalidateQueries({ queryKey: ['costes-lineas', ejercicio, mes] })
     },
     onError: (e) => message.error(apiError(e, 'Error al clasificar los costes')),
   })
 
   const actualizar = useMutation({
-    mutationFn: (data: any) => costesApi.actualizarLinea(presupuestoId!, lineaEdit.id, data),
+    mutationFn: (data: any) => costesApi.actualizarLinea(ejercicio!, lineaEdit.id, data),
     onSuccess: () => {
       message.success('Clasificación actualizada')
-      qc.invalidateQueries({ queryKey: ['costes-lineas', presupuestoId, mes] })
+      qc.invalidateQueries({ queryKey: ['costes-lineas', ejercicio, mes] })
       setLineaEdit(null)
     },
     onError: (e) => message.error(apiError(e, 'Error al actualizar la clasificación')),
   })
-
-  const onSelectPresupuesto = (id: string) => {
-    setPresupuestoId(id)
-    const p = presupuestos.find((x: any) => x.id === id)
-    if (p) setEjercicio(p.ejercicio)
-  }
 
   const pendientes = lineas.filter((l: any) => l.estado === 'pendiente').length
   const clasificadas = lineas.filter((l: any) => l.estado === 'clasificado').length
@@ -173,8 +165,8 @@ export default function Clasificacion() {
           <Text type="secondary">Clasificación automática y manual por familia de gasto</Text>
         </div>
         <Space>
-          <Select placeholder="Ejercicio" style={{ width: 200 }} onChange={onSelectPresupuesto} value={presupuestoId}>
-            {presupuestos.map((p: any) => <Option key={p.id} value={p.id}>Ejercicio {p.ejercicio}</Option>)}
+          <Select placeholder="Ejercicio" style={{ width: 150 }} onChange={setEjercicio} value={ejercicio}>
+            {anyos.map((a: number) => <Option key={a} value={a}>Ejercicio {a}</Option>)}
           </Select>
           <Select value={mes} onChange={setMes} style={{ width: 100 }}>
             {MESES.map((m, i) => <Option key={i + 1} value={i + 1}>{m}</Option>)}
@@ -182,7 +174,7 @@ export default function Clasificacion() {
           <Button
             type="primary" icon={<ThunderboltOutlined />}
             loading={clasificar.isPending}
-            disabled={!presupuestoId || !ejercicio}
+            disabled={!ejercicio}
             onClick={() => clasificar.mutate()}
           >
             Clasificar automático
@@ -190,9 +182,9 @@ export default function Clasificacion() {
         </Space>
       </div>
 
-      {!presupuestoId && <Alert type="info" showIcon message="Selecciona un ejercicio para ver las líneas de coste" />}
+      {!ejercicio && <Alert type="info" showIcon message="Selecciona un ejercicio para ver las líneas de coste" />}
 
-      {presupuestoId && (
+      {ejercicio && (
         <>
           <Row gutter={16}>
             <Col span={6}>

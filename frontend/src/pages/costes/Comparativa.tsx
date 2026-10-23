@@ -9,7 +9,6 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
   Legend, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
-import { presupuestoApi } from '../../api/presupuesto'
 import { costesApi } from '../../api/costes'
 
 const { Title, Text } = Typography
@@ -31,18 +30,18 @@ function DesvTag({ desv, desv_pct }: { desv: number; desv_pct: number }) {
 }
 
 export default function Comparativa() {
-  const [presupuestoId, setPresupuestoId] = useState<string | null>(null)
+  const [ejercicio, setEjercicio] = useState<number | null>(null)
   const [mesesSel, setMesesSel] = useState<number[]>([1, 2, 3, 4, 5, 6])
 
-  const { data: presupuestos = [] } = useQuery({
-    queryKey: ['presupuestos'],
-    queryFn: () => presupuestoApi.listar().then(r => r.data),
+  const { data: anyos = [] } = useQuery({
+    queryKey: ['costes-anyos'],
+    queryFn: () => costesApi.anyosDisponibles().then(r => r.data),
   })
 
   const { data: comparativa, isLoading } = useQuery({
-    queryKey: ['costes-comparativa', presupuestoId, mesesSel],
-    queryFn: () => costesApi.comparativa(presupuestoId!, mesesSel).then(r => r.data),
-    enabled: !!presupuestoId && mesesSel.length > 0,
+    queryKey: ['costes-comparativa', ejercicio, mesesSel],
+    queryFn: () => costesApi.comparativa(ejercicio!, mesesSel).then(r => r.data),
+    enabled: !!ejercicio && mesesSel.length > 0,
   })
 
   const familias: any[] = comparativa?.familias || []
@@ -92,8 +91,8 @@ export default function Comparativa() {
           <Text type="secondary">Comparativa de costes reales frente al presupuesto por familia</Text>
         </div>
         <Space>
-          <Select placeholder="Ejercicio" style={{ width: 200 }} onChange={setPresupuestoId} value={presupuestoId}>
-            {presupuestos.map((p: any) => <Option key={p.id} value={p.id}>Ejercicio {p.ejercicio}</Option>)}
+          <Select placeholder="Ejercicio" style={{ width: 150 }} onChange={setEjercicio} value={ejercicio}>
+            {anyos.map((a: number) => <Option key={a} value={a}>Ejercicio {a}</Option>)}
           </Select>
           <Select
             mode="multiple"
@@ -108,9 +107,9 @@ export default function Comparativa() {
         </Space>
       </div>
 
-      {!presupuestoId && <Alert type="info" showIcon message="Selecciona un ejercicio para ver la comparativa de costes" />}
+      {!ejercicio && <Alert type="info" showIcon message="Selecciona un ejercicio para ver la comparativa de costes" />}
 
-      {presupuestoId && comparativa && (
+      {ejercicio && comparativa && (
         <>
           <Row gutter={16}>
             <Col span={8}>

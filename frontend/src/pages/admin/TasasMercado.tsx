@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import {
   Space, Typography, Card, Table, Tag, Button, Select,
-  Modal, Form, InputNumber, Input, Switch, Popconfirm, message, Row, Col,
+  Modal, Form, InputNumber, Input, Switch, Popconfirm, message, Row, Col, Alert,
 } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, CloudDownloadOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { adminApi } from '../../api/admin'
 import { apiError } from '../../utils/errorHandler'
@@ -24,11 +24,43 @@ export default function TasasMercado() {
   const [modalVisible, setModalVisible] = useState(false)
   const [editando, setEditando] = useState<any>(null)
   const [form] = Form.useForm()
+  const [poblarModalVisible, setPoblarModalVisible] = useState(false)
+  const [poblarAnyo, setPoblarAnyo] = useState<number | null>(null)
+  const [poblarResult, setPoblarResult] = useState<{ insertados: number; omitidos: number } | null>(null)
 
   const { data: anyos = [] } = useQuery({
     queryKey: ['admin-tasas-anyos'],
     queryFn: () => adminApi.listarAnyos().then(r => r.data),
   })
+
+  const { data: anyosIcea = [] } = useQuery({
+    queryKey: ['admin-tasas-icea-anyos'],
+    queryFn: () => adminApi.listarAnyosIceaDisponibles().then(r => r.data),
+  })
+
+  const poblarIcea = useMutation({
+    mutationFn: (anyo: number) => adminApi.poblarTasasIcea(anyo),
+    onSuccess: (res) => {
+      setPoblarResult(res.data)
+      qc.invalidateQueries({ queryKey: ['admin-tasas'] })
+      qc.invalidateQueries({ queryKey: ['admin-tasas-anyos'] })
+    },
+    onError: (e) => message.error(apiError(e, 'Error al poblar desde ICEA')),
+  })
+
+  const abrirPoblar = () => {
+    setPoblarAnyo(null)
+    setPoblarResult(null)
+    setPoblarModalVisible(true)
+  }
+
+  const confirmarPoblar = () => {
+    if (!poblarAnyo) {
+      message.error('Elige un año')
+      return
+    }
+    poblarIcea.mutate(poblarAnyo)
+  }
 
   const { data: tasas = [], isLoading } = useQuery({
     queryKey: ['admin-tasas', anyoFiltro, tipoFiltro],
@@ -179,9 +211,14 @@ export default function TasasMercado() {
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Title level={4} style={{ margin: 0 }}>Tasas de referencia de mercado</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={abrirCrear}>
-          Nueva tasa
-        </Button>
+        <Space>
+          <Button icon={<CloudDownloadOutlined />} onClick={abrirPoblar}>
+            Poblar desde ICEA
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={abrirCrear}>
+            Nueva tasa
+          </Button>
+        </Space>
       </div>
 
       <Card size="small">
@@ -285,6 +322,51 @@ export default function TasasMercado() {
             <Input.TextArea rows={2} placeholder="Fuente, observaciones..." />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="Poblar desde ICEA"
+        open={poblarModalVisible}
+        onOk={confirmarPoblar}
+        onCancel={() => setPoblarModalVisible(false)}
+        confirmLoading={poblarIcea.isPending}
+        okText="Poblar"
+        cancelText="Cancelar"
+        width={450}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%', marginTop: 16 }}>
+          <Text type="secondary">
+            Inserta las tasas de crecimiento y caída del catálogo interno ICEA para el año
+            elegido. Si una tasa ya existe para ese año se omite, no se duplica.
+          </Text>
+          <div>
+            <Text strong>Año</Text>
+            <div style={{ marginTop: 4 }}>
+              <Select
+                style={{ width: '100%' }}
+                placeholder="Elige un año con fuente ICEA disponible"
+                value={poblarAnyo ?? undefined}
+                onChange={setPoblarAnyo}
+              >
+                {(anyosIcea as number[]).map((a) => (
+                  <Option key={a} value={a}>{a}</Option>
+                ))}
+              </Select>
+            </div>
+            {(anyosIcea as number[]).length === 0 && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                No hay años con fuente ICEA en el catálogo interno todavía.
+              </Text>
+            )}
+          </div>
+          {poblarResult && (
+            <Alert
+              type={poblarResult.insertados > 0 ? 'success' : 'info'}
+              showIcon
+              message={`${poblarResult.insertados} tasa(s) insertada(s), ${poblarResult.omitidos} ya existían`}
+            />
+          )}
+        </Space>
       </Modal>
     </Space>
   )

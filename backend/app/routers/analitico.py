@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from ..core.database import get_db
-from ..core.dependencies import get_current_user, require_gestor_or_admin
+from ..core.dependencies import get_current_user, require_gestor_or_admin, require_admin
 from ..models.user import User
 from ..models.analitico import NATURALEZAS, DRIVERS
 from ..services.analitico import (
@@ -353,7 +353,7 @@ def get_valoracion(
 def debug_cesion(
     ejercicio: int = Query(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Diagnóstico: estado de las cuentas 623 en diario, modelo y mapeo."""
     from sqlalchemy import text as _t

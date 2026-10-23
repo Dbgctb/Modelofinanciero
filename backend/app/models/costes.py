@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, Enum as SAEnum, ForeignKey, Text, JSON
+from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, Enum as SAEnum, ForeignKey, Text, JSON, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -42,27 +42,80 @@ class EstadoCoste(str, enum.Enum):
     CON_ALERTA = "con_alerta"
 
 
-# Clasificación automática predefinida por familia (REQ-028)
+# Clasificación automática predefinida por familia (REQ-028).
+# Cada entrada "estándar" es la definición real; las claves de más abajo
+# ("nombres reales de la correduría") son alias que apuntan al mismo dict,
+# porque el familia_gasto que trae el diario real no usa los nombres
+# genéricos del Mapeo de cuentas RF, sino estos (comprobado contra datos
+# reales 2020-2025, el mismo problema que ya resolvía _FAMILIA_A_NATURALEZA
+# en el modelo analítico). Sin estos alias, una línea real con
+# familia_gasto="Alquiler" no encontraba "Alquiler y oficina" y se quedaba
+# siempre en estado CON_ALERTA.
+_PERSONAL = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE}
+_CESION_AUXILIAR = {"tipo": TipoCoste.VARIABLE, "tratamiento": TratamientoCoste.DIRECTO, "driver": DriverReparto.COMISION_CONTABLE}
+_ALQUILER = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE}
+_TECNOLOGIA = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE}
+_SERVICIOS_PROFESIONALES = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE}
+_MARKETING = {"tipo": TipoCoste.VARIABLE, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.NUEVA_PRODUCCION}
+_FINANCIERO = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE}
+_TRIBUTOS_SEGUROS = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE}
+_AMORTIZACIONES = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.EXCLUIDO, "driver": DriverReparto.COMISION_CONTABLE}
+_OTROS_GASTOS = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE}
+_EXTRAORDINARIOS = {"tipo": TipoCoste.FIJO, "tratamiento": TratamientoCoste.EXCLUIDO, "driver": DriverReparto.COMISION_CONTABLE}
+
 CLASIFICACION_POR_FAMILIA = {
-    "Personal":                {"tipo": TipoCoste.FIJO,     "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE},
-    "Cesiones a auxiliares":   {"tipo": TipoCoste.VARIABLE, "tratamiento": TratamientoCoste.DIRECTO,   "driver": DriverReparto.COMISION_CONTABLE},
-    "Alquiler y oficina":      {"tipo": TipoCoste.FIJO,     "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE},
-    "Tecnología y software":   {"tipo": TipoCoste.FIJO,     "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE},
-    "Servicios profesionales": {"tipo": TipoCoste.FIJO,     "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE},
-    "Marketing y captación":   {"tipo": TipoCoste.VARIABLE, "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.NUEVA_PRODUCCION},
-    "Gastos financieros":      {"tipo": TipoCoste.FIJO,     "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE},
-    "Tributos y seguros":      {"tipo": TipoCoste.FIJO,     "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE},
-    "Amortizaciones y ajustes":{"tipo": TipoCoste.FIJO,     "tratamiento": TratamientoCoste.EXCLUIDO,  "driver": DriverReparto.COMISION_CONTABLE},
-    "Otros gastos":            {"tipo": TipoCoste.FIJO,     "tratamiento": TratamientoCoste.INDIRECTO, "driver": DriverReparto.COMISION_CONTABLE},
+    # ── Nombres estándar ──
+    "Personal":                 _PERSONAL,
+    "Cesiones a auxiliares":    _CESION_AUXILIAR,
+    "Alquiler y oficina":       _ALQUILER,
+    "Tecnología y software":    _TECNOLOGIA,
+    "Servicios profesionales":  _SERVICIOS_PROFESIONALES,
+    "Marketing y captación":    _MARKETING,
+    "Gastos financieros":       _FINANCIERO,
+    "Tributos y seguros":       _TRIBUTOS_SEGUROS,
+    "Amortizaciones y ajustes": _AMORTIZACIONES,
+    "Otros gastos":             _OTROS_GASTOS,
+    # ── Nombres reales de la correduría (familia_gasto tal cual en el diario) ──
+    "Cesión Auxiliar":          _CESION_AUXILIAR,
+    "Cesion Auxiliar":          _CESION_AUXILIAR,
+    "Alquiler":                 _ALQUILER,
+    "Renting":                  _ALQUILER,
+    "Otros Servicios":          _SERVICIOS_PROFESIONALES,
+    "Reparaciones":             _SERVICIOS_PROFESIONALES,
+    "Seguros":                  _TRIBUTOS_SEGUROS,
+    "Impuestos":                _TRIBUTOS_SEGUROS,
+    "Financieros":              _FINANCIERO,
+    "Relaciones Publicas":      _MARKETING,
+    "Relaciones Públicas":      _MARKETING,
+    "Suministros":              _OTROS_GASTOS,
+    "Descuentos":               _OTROS_GASTOS,
+    "Telefono":                 _OTROS_GASTOS,
+    "Teléfono":                 _OTROS_GASTOS,
+    "software":                 _TECNOLOGIA,
+    "Software":                 _TECNOLOGIA,
+    "Amortizacion":             _AMORTIZACIONES,
+    "Amortización":             _AMORTIZACIONES,
+    "extraordinarios":          _EXTRAORDINARIOS,
+    "Extraordinarios":          _EXTRAORDINARIOS,
 }
 
 
 class LineaCoste(Base):
-    """Cada línea de coste clasificada para un periodo y presupuesto."""
+    """
+    Cada línea de coste clasificada para un periodo. Se identifica por
+    ejercicio+mes, no por presupuesto -- funciona con solo tener diario real
+    cargado, sin necesitar que exista ningún presupuesto para ese año.
+    presupuesto_id se rellena solo si existe un Presupuesto para el mismo
+    ejercicio (se usa únicamente para comparar importe_real vs
+    importe_presupuesto); si no existe, queda a NULL.
+    """
     __tablename__ = "lineas_coste"
+    __table_args__ = (
+        Index('ix_lineas_coste_ejercicio_mes', 'ejercicio', 'mes'),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    presupuesto_id = Column(UUID(as_uuid=True), ForeignKey("presupuestos.id", ondelete="CASCADE"), nullable=False)
+    presupuesto_id = Column(UUID(as_uuid=True), ForeignKey("presupuestos.id", ondelete="SET NULL"), nullable=True)
     mes = Column(Integer, nullable=False)
     ejercicio = Column(Integer, nullable=False)
 

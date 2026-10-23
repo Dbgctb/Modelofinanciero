@@ -7,7 +7,6 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   ResponsiveContainer, Tooltip as RTooltip,
 } from 'recharts'
-import { presupuestoApi } from '../../api/presupuesto'
 import { costesApi } from '../../api/costes'
 
 const { Title, Text } = Typography
@@ -18,18 +17,18 @@ const fmt = (v: number) => v?.toLocaleString('es-ES', { minimumFractionDigits: 2
 const fmtPct = (v: number) => v?.toFixed(2) + '%'
 
 export default function KPIsCostes() {
-  const [presupuestoId, setPresupuestoId] = useState<string | null>(null)
+  const [ejercicio, setEjercicio] = useState<number | null>(null)
   const [mesesSel, setMesesSel] = useState<number[]>([1, 2, 3, 4, 5, 6])
 
-  const { data: presupuestos = [] } = useQuery({
-    queryKey: ['presupuestos'],
-    queryFn: () => presupuestoApi.listar().then(r => r.data),
+  const { data: anyos = [] } = useQuery({
+    queryKey: ['costes-anyos'],
+    queryFn: () => costesApi.anyosDisponibles().then(r => r.data),
   })
 
   const { data: kpis = [], isLoading } = useQuery({
-    queryKey: ['costes-kpis', presupuestoId, mesesSel],
-    queryFn: () => costesApi.kpis(presupuestoId!, mesesSel).then(r => r.data),
-    enabled: !!presupuestoId && mesesSel.length > 0,
+    queryKey: ['costes-kpis', ejercicio, mesesSel],
+    queryFn: () => costesApi.kpis(ejercicio!, mesesSel).then(r => r.data),
+    enabled: !!ejercicio && mesesSel.length > 0,
   })
 
   // KPIs principales (CK-01 a CK-06)
@@ -59,8 +58,8 @@ export default function KPIsCostes() {
           <Text type="secondary">Indicadores de eficiencia y estructura de costes</Text>
         </div>
         <Space>
-          <Select placeholder="Ejercicio" style={{ width: 200 }} onChange={setPresupuestoId} value={presupuestoId}>
-            {presupuestos.map((p: any) => <Option key={p.id} value={p.id}>Ejercicio {p.ejercicio}</Option>)}
+          <Select placeholder="Ejercicio" style={{ width: 150 }} onChange={setEjercicio} value={ejercicio}>
+            {anyos.map((a: number) => <Option key={a} value={a}>Ejercicio {a}</Option>)}
           </Select>
           <Select
             mode="multiple"
@@ -75,9 +74,9 @@ export default function KPIsCostes() {
         </Space>
       </div>
 
-      {!presupuestoId && <Alert type="info" showIcon message="Selecciona un ejercicio para ver los KPIs de costes" />}
+      {!ejercicio && <Alert type="info" showIcon message="Selecciona un ejercicio para ver los KPIs de costes" />}
 
-      {presupuestoId && kpis.length === 0 && !isLoading && (
+      {ejercicio && kpis.length === 0 && !isLoading && (
         <Alert type="warning" showIcon
           message="Sin datos de costes. Asegúrate de que hay líneas clasificadas e imputadas para los meses seleccionados." />
       )}

@@ -12,6 +12,7 @@ from ..models.presupuesto import (
     PresupuestoCesionAuxiliar, PresupuestoIngreso,
 )
 from ..models.diario import DiarioApunte, TipoCuenta, EstadoApunte
+from ..models.auxiliares import AuxiliarComisionRef
 
 MESES = list(range(1, 13))
 
@@ -250,12 +251,28 @@ def generar_cesiones_auxiliar(db: Session, presupuesto: Presupuesto) -> int:
 
     creadas = 0
     auxiliares_nuevos = set(grupos.keys()) - set(existentes.keys())
+
+    # Catálogo de % comisión y % retención por auxiliar para el año del presupuesto
+    # (Administración → Auxiliares). Se aplica tanto a las cesiones nuevas como a las
+    # ya existentes que todavía no tengan el % configurado (0 y, para comisión, sin
+    # override manual), para que cargar/editar el catálogo y pulsar "Sincronizar desde
+    # ingresos" también las rellene. Nunca pisa una cesión bloqueada ni un % ya
+    # configurado (a mano o porque ya se sincronizó antes con un valor >0).
+    catalogo = {
+        c.auxiliar: {'comision': float(c.comision_colaborador), 'retencion': float(c.pct_retencion)}
+        for c in db.query(AuxiliarComisionRef).filter(
+            AuxiliarComisionRef.anyo == presupuesto.ejercicio,
+            AuxiliarComisionRef.auxiliar.in_(grupos.keys()),
+        ).all()
+    }
+
     for aux in auxiliares_nuevos:
+        cat = catalogo.get(aux, {})
         c = PresupuestoCesionAuxiliar(
             presupuesto_id=presupuesto.id,
             auxiliar=aux,
-            pct_comision=0,
-            pct_retencion=0,
+            pct_comision=cat.get('comision', 0),
+            pct_retencion=cat.get('retencion', 0),
             importes_mensuales=[0.0] * 12,
         )
         db.add(c)
@@ -264,6 +281,15 @@ def generar_cesiones_auxiliar(db: Session, presupuesto: Presupuesto) -> int:
 
     # Flush para que los nuevos objetos tengan ID y se puedan actualizar
     db.flush()
+
+    for aux, cat in catalogo.items():
+        c = existentes.get(aux)
+        if not c or c.bloqueado:
+            continue
+        if float(c.pct_comision or 0) == 0 and c.gasto_comision_manual is None:
+            c.pct_comision = cat['comision']
+        if float(c.pct_retencion or 0) == 0:
+            c.pct_retencion = cat['retencion']
 
     # Actualizar totales e importes calculados en todos usando los importes de INGRESO
     for aux, g in grupos.items():

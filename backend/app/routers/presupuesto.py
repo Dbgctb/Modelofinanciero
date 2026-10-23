@@ -74,14 +74,19 @@ def detalle_presupuesto(
 @router.post("/{presupuesto_id}/ingresos/generar")
 def generar_ingresos(
     presupuesto_id: UUID,
+    coeficiente_prudencia: float = Body(..., embed=True, ge=0, le=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_gestor_or_admin),
 ):
-    """RF-ING-04 a RF-ING-13: genera líneas de ingresos desde el ejercicio base."""
+    """
+    RF-ING-04 a RF-ING-13: genera líneas de ingresos desde el ejercicio base.
+    coeficiente_prudencia lo elige el usuario en la pantalla (0-1): fracción del
+    exceso de mercado sobre el modelo propio que se incorpora al crecimiento final.
+    """
     p = _get_presupuesto(db, presupuesto_id)
     _validar_no_cerrado(p)
     t0 = time.monotonic()
-    n = generar_lineas_ingresos(db, p)
+    n = generar_lineas_ingresos(db, p, coeficiente_prudencia)
     tiempo = round(time.monotonic() - t0, 1)
     return {"mensaje": f"{n} líneas generadas en {tiempo}s", "lineas": n, "tiempo_segundos": tiempo}
 
@@ -924,6 +929,7 @@ def _serializar_presupuesto(p: Presupuesto) -> dict:
 
 
 def _serializar_ingreso(l: PresupuestoIngreso) -> dict:
+    base_bruta = float(l.ingreso_base_anual or 0)
     base_limpio = float(l.ingreso_base_limpio or 0)
     tasa_caida = float(l.tasa_caida or 0)
     return {
@@ -932,12 +938,15 @@ def _serializar_ingreso(l: PresupuestoIngreso) -> dict:
         "ramo": l.ramo,
         "auxiliar": l.auxiliar,
         "tipo_negocio": l.tipo_negocio,
-        "ingreso_base_anual": float(l.ingreso_base_anual or 0),
+        "ingreso_base_anual": base_bruta,
         "tiene_atipicos": l.tiene_atipicos,
         "atipicos_excluidos": float(l.atipicos_excluidos or 0),
         "ingreso_base_limpio": base_limpio,
         "tasa_caida": tasa_caida,
-        "base_superviviente": round(base_limpio * (1 - tasa_caida / 100), 2),
+        # La caída aplica a TODA la base (limpia + atípicos, ver generar_lineas_ingresos):
+        # los atípicos son cartera real sujeta al mismo riesgo de anulación, aunque no
+        # se les aplique crecimiento.
+        "base_superviviente": round(base_bruta * (1 - tasa_caida / 100), 2),
         "crecimiento_modelo": float(l.crecimiento_modelo or 0),
         "crecimiento_mercado": float(l.crecimiento_mercado or 0),
         "coeficiente_prudencia": float(l.coeficiente_prudencia or 1),

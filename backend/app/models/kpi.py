@@ -37,4 +37,11 @@ class ResultadoKPI(Base):
     valor = Column(Numeric(18, 4), nullable=True)
     semaforo = Column(SAEnum(SemaforoColor), nullable=True)
     dimension = Column(String(150), nullable=True)  # compañía / ramo / auxiliar (para KPIs dimensionados)
+    # True para KPIs que no tienen un umbral comparable en este modo (p.ej. KPI-08
+    # es "Gastos operativos propios (€)" en modo presupuesto -- sin datos reales
+    # todavía -- pero "% Cumplimiento de gastos" una vez hay meses cerrados; el
+    # umbral guardado está en puntos porcentuales y no es aplicable a un importe en
+    # euros). El frontend usa este campo para no mostrar una Meta sin sentido, en
+    # vez de adivinarlo por el texto de kpi_nombre.
+    informativo = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

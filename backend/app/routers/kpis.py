@@ -69,6 +69,7 @@ def obtener_resultados(
             "semaforo": r.semaforo.value if r.semaforo else None,
             "dimension": r.dimension,
             "mes": r.mes,
+            "informativo": r.informativo,
         }
         for r in rows
     ]

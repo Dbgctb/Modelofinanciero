@@ -6,7 +6,6 @@ import {
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { PieChart, Pie, Cell, Tooltip as RTooltip, Legend, ResponsiveContainer } from 'recharts'
-import { presupuestoApi } from '../../api/presupuesto'
 import { costesApi } from '../../api/costes'
 import { apiError } from '../../utils/errorHandler'
 
@@ -20,25 +19,25 @@ const fmt = (v: number) => v?.toLocaleString('es-ES', { minimumFractionDigits: 2
 
 export default function Imputacion() {
   const qc = useQueryClient()
-  const [presupuestoId, setPresupuestoId] = useState<string | null>(null)
+  const [ejercicio, setEjercicio] = useState<number | null>(null)
   const [mesesSel, setMesesSel] = useState<number[]>([1])
 
-  const { data: presupuestos = [] } = useQuery({
-    queryKey: ['presupuestos'],
-    queryFn: () => presupuestoApi.listar().then(r => r.data),
+  const { data: anyos = [] } = useQuery({
+    queryKey: ['costes-anyos'],
+    queryFn: () => costesApi.anyosDisponibles().then(r => r.data),
   })
 
   const { data: lineas = [], isLoading } = useQuery({
-    queryKey: ['costes-lineas-imp', presupuestoId],
-    queryFn: () => costesApi.listarLineas(presupuestoId!).then(r => r.data),
-    enabled: !!presupuestoId,
+    queryKey: ['costes-lineas-imp', ejercicio],
+    queryFn: () => costesApi.listarLineas(ejercicio!).then(r => r.data),
+    enabled: !!ejercicio,
   })
 
   const imputar = useMutation({
-    mutationFn: () => costesApi.imputar(presupuestoId!, mesesSel),
+    mutationFn: () => costesApi.imputar(ejercicio!, mesesSel),
     onSuccess: (r) => {
       message.success(`${r.data.imputadas} líneas imputadas correctamente`)
-      qc.invalidateQueries({ queryKey: ['costes-lineas-imp', presupuestoId] })
+      qc.invalidateQueries({ queryKey: ['costes-lineas-imp', ejercicio] })
     },
     onError: (e) => message.error(apiError(e, 'Error al imputar los costes')),
   })
@@ -128,8 +127,8 @@ export default function Imputacion() {
           <Text type="secondary">Reparto de costes indirectos por driver entre dimensiones</Text>
         </div>
         <Space>
-          <Select placeholder="Ejercicio" style={{ width: 200 }} onChange={setPresupuestoId} value={presupuestoId}>
-            {presupuestos.map((p: any) => <Option key={p.id} value={p.id}>Ejercicio {p.ejercicio}</Option>)}
+          <Select placeholder="Ejercicio" style={{ width: 150 }} onChange={setEjercicio} value={ejercicio}>
+            {anyos.map((a: number) => <Option key={a} value={a}>Ejercicio {a}</Option>)}
           </Select>
           <Select
             mode="multiple"
@@ -143,7 +142,7 @@ export default function Imputacion() {
           <Button
             type="primary" icon={<ThunderboltOutlined />}
             loading={imputar.isPending}
-            disabled={!presupuestoId || mesesSel.length === 0}
+            disabled={!ejercicio || mesesSel.length === 0}
             onClick={() => imputar.mutate()}
           >
             Ejecutar imputación
@@ -151,9 +150,16 @@ export default function Imputacion() {
         </Space>
       </div>
 
-      {!presupuestoId && <Alert type="info" showIcon message="Selecciona un ejercicio para ver la imputación de costes" />}
+      <Alert
+        type="info"
+        showIcon
+        message="Vista aproximada, solo por compañía"
+        description="Este reparto es una estimación rápida (comisión contable / nueva producción, agregado por compañía). Para el detalle real de rentabilidad por cliente, ramo o auxiliar, consulta el Modelo Analítico."
+      />
 
-      {presupuestoId && (
+      {!ejercicio && <Alert type="info" showIcon message="Selecciona un ejercicio para ver la imputación de costes" />}
+
+      {ejercicio && (
         <>
           <Row gutter={16}>
             <Col span={6}>
