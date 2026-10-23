@@ -5,7 +5,7 @@ import {
   TeamOutlined, LogoutOutlined, UserOutlined, KeyOutlined,
   BellOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
   SettingOutlined, DatabaseOutlined, DeleteOutlined, RiseOutlined,
-  SafetyCertificateOutlined, BulbOutlined, PieChartOutlined,
+  SafetyCertificateOutlined, BulbOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation, Outlet } from 'react-router-dom'
 import { useAuthStore } from '../../store/authStore'
@@ -30,17 +30,6 @@ const MENU_ITEMS = [
       { key: '/presupuestacion/real', label: 'Seguimiento real' },
       { key: '/presupuestacion/kpis', label: 'KPIs' },
       { key: '/presupuestacion/cuenta-resultados', label: 'Cuenta de Resultados' },
-    ],
-  },
-  {
-    key: 'costes',
-    icon: <PieChartOutlined />,
-    label: 'Costes',
-    children: [
-      { key: '/costes/clasificacion', label: 'Clasificación' },
-      { key: '/costes/imputacion', label: 'Imputación' },
-      { key: '/costes/comparativa', label: 'Comparativa' },
-      { key: '/costes/kpis', label: 'KPIs de costes' },
     ],
   },
   {
