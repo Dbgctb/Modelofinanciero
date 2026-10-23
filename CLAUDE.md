@@ -181,6 +181,7 @@ Código;Nombre;F.Alta;F.Nacimie;Fis/Jur;T. Fijo;T. Móvil;E-Mail
 - Mensajes de commit en español, descriptivos del cambio.
 - Avisar al usuario antes de hacer cualquier commit y esperar confirmación.
 - Formato: `git commit -m "tipo: descripción del cambio"`
+- Push (política acordada con el usuario, 2026-10-23): una vez confirmado un commit, se puede hacer push normal a `origin` (incluida `main`, que es la rama de trabajo habitual de este repo) sin volver a preguntar. Force push, reescritura de historial, tags/releases y cualquier despliegue siguen requiriendo autorización explícita.
 
 ---
 
