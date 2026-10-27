@@ -13,17 +13,22 @@ import { cuadreApi } from '../../api/cuadre'
 const { Title, Text } = Typography
 
 // ── Formatters ────────────────────────────────────────────────────────────────
+// Importes con 2 decimales y porcentajes con 2 decimales, igual que la Cuenta de
+// Resultados y el Modelo Analítico, para que las cifras se lean idénticas.
+// Espacio no separable antes de "€" para que la cifra no se parta en dos líneas.
+const _milesDec = (v: number) => {
+  const [ent, dec] = Math.abs(v).toFixed(2).split('.')
+  return ent.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + dec
+}
 const fmtE = (v: number | null | undefined) => {
   if (v === null || v === undefined) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
-  const abs = Math.round(Math.abs(v)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
-  return (v < 0 ? '-' : '') + abs + ' €'
+  return (v <= -0.005 ? '-' : '') + _milesDec(v) + ' €'
 }
 const fmtP = (v: number | null | undefined) =>
-  v === null || v === undefined ? '—' : v.toFixed(1).replace('.', ',') + '%'
+  v === null || v === undefined ? '—' : v.toFixed(2).replace('.', ',') + '%'
 const fmtD = (v: number | null | undefined) => {
   if (v === null || v === undefined) return '—'
-  const abs = Math.round(Math.abs(v)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
-  return (v > 0 ? '+' : v < 0 ? '-' : '') + abs + ' €'
+  return (v >= 0.005 ? '+' : v <= -0.005 ? '-' : '') + _milesDec(v) + ' €'
 }
 
 // ── Semáforo ──────────────────────────────────────────────────────────────────
@@ -75,7 +80,7 @@ function Delta({ a, b, esPct, informativo }: {
     ? '#1890ff'
     : abs <= 1 ? '#52c41a' : abs <= 500 ? '#faad14' : '#f5222d'
   if (esPct) {
-    const pp = diff.toFixed(1).replace('.', ',')
+    const pp = diff.toFixed(2).replace('.', ',')
     return <Text style={{ color, fontSize: 11, fontWeight: 600 }}>{diff >= 0 ? '+' : ''}{pp} pp</Text>
   }
   return <Text style={{ color, fontSize: 11, fontWeight: 600 }}>{fmtD(diff)}</Text>
