@@ -10,6 +10,7 @@ P&L por cliente
 ---------------
   ingreso_bruto   = Σ importe  WHERE tipo_cuenta='ingreso'  y recibo vinculado al tomador
   cesion_directa  = Σ -importe WHERE naturaleza='Cesión auxiliar' y recibo vinculado al tomador
+                    con ingreso en el ejercicio (la 623 de recibos de años anteriores no cuenta)
   costes_indirectos = (costes operativos totales excl. cesión) × peso del cliente
 
   peso = ingreso_bruto_cliente / total_ingresos_analitico
@@ -173,12 +174,32 @@ def calcular_rentabilidad_clientes(
     ces_directo: dict[str, float] = {}
 
     for r in por_tomador_rows:
-        tomador, tipo, nat, ncuenta, ente, total = r[0], r[1], r[2], r[3], r[4], float(r[5])
+        tomador, tipo, total = r[0], r[1], float(r[5])
         if tipo == 'ingreso':
             ing_directo[tomador] = ing_directo.get(tomador, 0.0) + total
-        elif nat == 'Cesión auxiliar' and ncuenta and ncuenta.startswith('623') and ente is not None:
-            ces_directo[tomador] = ces_directo.get(tomador, 0.0) + (-total)
         # 623 sin auxiliar (ente IS NULL) y 640/642: ignorados
+
+    # Cesión 623 por tomador: SOLO de recibos con ingreso en el ejercicio, mismo criterio
+    # que total_ces_global. La 623 pagada en el año sobre recibos de años anteriores (la
+    # cesión se paga con ~1 año de retraso) es de otro ejercicio: contarla aquí y además
+    # estimar la de los recibos del año cargaba al cliente dos cesiones en un año
+    # (detectado 2026-10-27 con PARTICIPACIONES PROYECTOS INMOBILIARIOS S.L.).
+    for r in _q(db, """
+        SELECT r.tomador, COALESCE(SUM(-CAST(f.importe AS FLOAT)), 0)
+        FROM fact_resultado_analitico f
+        JOIN recibos r ON f.recibo_id = r.id
+        WHERE f.ejercicio = :ej
+          AND f.naturaleza = 'Cesión auxiliar'
+          AND f.numero_cuenta LIKE '623%'
+          AND r.ente IS NOT NULL
+          AND r.tomador IS NOT NULL AND r.tomador != ''
+          AND f.recibo_id IN (
+              SELECT DISTINCT recibo_id FROM fact_resultado_analitico
+              WHERE ejercicio = :ej AND tipo_cuenta = 'ingreso' AND recibo_id IS NOT NULL
+          )
+        GROUP BY r.tomador
+    """, ej=ejercicio):
+        ces_directo[r[0]] = float(r[1])
 
     if not ing_directo:
         return {"sin_datos": True}
@@ -210,7 +231,7 @@ def calcular_rentabilidad_clientes(
     for r in global_rows:
         tipo, nat, _ncuenta, val = r[0], r[1], r[2], float(r[3])
         # Resultado financiero (intereses 66*) queda debajo del EBITDA: fuera de los pools.
-        if tipo == 'gasto' and nat and nat not in ('Cesión auxiliar', 'Marketing', NATURALEZA_RESULTADO_FINANCIERO):
+        if tipo == 'gasto' and nat and nat not in ('Cesión auxiliar', NATURALEZA_RESULTADO_FINANCIERO):
             cost = -val
             drv = DRIVERS_DEFAULT.get(nat, 'RECIBOS')
             if drv == 'COMISION_NETA':
@@ -237,9 +258,12 @@ def calcular_rentabilidad_clientes(
             string_agg(DISTINCT r.ente,     ', ') FILTER (WHERE r.ente     IS NOT NULL) AS auxiliares
         FROM recibos r
         JOIN (
+            -- Solo recibos con ingreso en el ejercicio (mismo criterio que _REC_EN_EJ del
+            -- analítico): los de años anteriores que solo traen la 623 pagada este año no
+            -- son negocio del año y desviaban los pesos RECIBOS/POLIZAS.
             SELECT DISTINCT recibo_id
             FROM fact_resultado_analitico
-            WHERE ejercicio = :ej AND recibo_id IS NOT NULL
+            WHERE ejercicio = :ej AND recibo_id IS NOT NULL AND tipo_cuenta = 'ingreso'
         ) fids ON r.id = fids.recibo_id
         WHERE r.tomador IS NOT NULL AND r.tomador != ''
         GROUP BY r.tomador
@@ -602,6 +626,9 @@ def recibos_por_cliente(db: Session, ejercicio: int, tomador: str) -> list:
         WHERE f.ejercicio = :ej
           AND r.tomador   = :tom
         GROUP BY r.id, r.codigo, r.numero_poliza, r.ramo, r.compania, r.ente
+        -- Solo recibos con ingreso en el ejercicio: los de años anteriores que solo
+        -- traen la 623 pagada este año no cuentan en la rentabilidad del cliente.
+        HAVING COUNT(*) FILTER (WHERE f.tipo_cuenta = 'ingreso') > 0
         ORDER BY ingreso DESC
     """, ej=ejercicio, tom=tomador)
 
