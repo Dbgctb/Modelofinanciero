@@ -35,10 +35,13 @@ identidad exacta con el modelo analítico.
 from sqlalchemy import text as _text
 from sqlalchemy.orm import Session
 
-from ..models.analitico import NATURALEZAS_COSTE_OP, DRIVERS_DEFAULT
+from ..models.analitico import (
+    NATURALEZAS_COSTE_OP, DRIVERS_DEFAULT, NATURALEZA_RESULTADO_FINANCIERO, PESO_POLIZA_INTERMEDIADA,
+)
+from .tasa_cesion import resolver_tasa, TASA_AUX_CTE, TASA_EXPR
 
 MIN_COMISION_DEFAULT = 0.0
-TASA_CESION_ESTIMADA_DEFAULT = 0.40
+# Tasa de cesión estimada por defecto: la real del ejercicio (ver tasa_cesion.py).
 
 _indexes_ensured = False
 
@@ -101,9 +104,10 @@ def calcular_rentabilidad_clientes(
     db: Session,
     ejercicio: int,
     min_comision: float = MIN_COMISION_DEFAULT,
-    tasa_cesion_estimada: float = TASA_CESION_ESTIMADA_DEFAULT,
+    tasa_cesion_estimada: float | None = None,
 ) -> dict:
 
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     _ensure_indexes(db)
 
     # ── 1. Totales globales del ejercicio ────────────────────────────────────
@@ -196,18 +200,23 @@ def calcular_rentabilidad_clientes(
     base_reparto = total_ing_directo if total_ing_directo > 0 else 1.0
 
     # Pools de costes desglosados por driver (respeta DRIVERS_DEFAULT del analítico):
-    #   RECIBOS      → Personal, Tecnología, Financiero, Bancos, Comunicaciones, etc.
-    #   COMISION_NETA → Alquiler, Viajes, Impuestos, Suministros
+    #   POLIZAS       → Personal, Servicios profesionales, Comunicaciones
+    #   RECIBOS       → Tecnología, Bancos
+    #   COMISION_NETA → Alquiler, Financiero, Viajes, Impuestos, Seguros, Suministros
     #   NUEVA_PRODUCCION (Marketing) → sin info NP por tomador, fallback a RECIBOS
     pool_recibos = 0.0   # costes que usan driver RECIBOS o NUEVA_PRODUCCION
+    pool_polizas = 0.0   # costes que usan driver POLIZAS
     pool_cn      = 0.0   # costes que usan driver COMISION_NETA
     for r in global_rows:
         tipo, nat, _ncuenta, val = r[0], r[1], r[2], float(r[3])
-        if tipo == 'gasto' and nat and nat not in ('Cesión auxiliar', 'Marketing'):
+        # Resultado financiero (intereses 66*) queda debajo del EBITDA: fuera de los pools.
+        if tipo == 'gasto' and nat and nat not in ('Cesión auxiliar', 'Marketing', NATURALEZA_RESULTADO_FINANCIERO):
             cost = -val
             drv = DRIVERS_DEFAULT.get(nat, 'RECIBOS')
             if drv == 'COMISION_NETA':
                 pool_cn += cost
+            elif drv == 'POLIZAS':
+                pool_polizas += cost
             else:
                 pool_recibos += cost
 
@@ -217,6 +226,10 @@ def calcular_rentabilidad_clientes(
             r.tomador,
             COUNT(*)                                                         AS n_recibos,
             COALESCE(SUM(CAST(r.pr_total AS FLOAT)), 0)                      AS prima_total,
+            -- Pólizas ponderadas por canal: intermediada = PESO_POLIZA_INTERMEDIADA
+            COUNT(DISTINCT COALESCE(r.numero_poliza, r.id::text)) FILTER (WHERE r.ente IS NULL)
+              + :peso_int * COUNT(DISTINCT COALESCE(r.numero_poliza, r.id::text)) FILTER (WHERE r.ente IS NOT NULL)
+                                                                             AS n_polizas,
             COUNT(DISTINCT r.ramo)     FILTER (WHERE r.ramo     IS NOT NULL) AS n_ramos,
             COUNT(DISTINCT r.compania) FILTER (WHERE r.compania IS NOT NULL) AS n_companias,
             string_agg(DISTINCT r.ramo,     ', ') FILTER (WHERE r.ramo     IS NOT NULL) AS ramos,
@@ -230,17 +243,18 @@ def calcular_rentabilidad_clientes(
         ) fids ON r.id = fids.recibo_id
         WHERE r.tomador IS NOT NULL AND r.tomador != ''
         GROUP BY r.tomador
-    """, ej=ejercicio)
+    """, ej=ejercicio, peso_int=PESO_POLIZA_INTERMEDIADA)
 
     meta: dict[str, dict] = {
         r[0]: {
             "n_recibos":   int(r[1]),
             "prima_total": float(r[2]),
-            "n_ramos":     int(r[3]),
-            "n_companias": int(r[4]),
-            "ramos":       r[5] or "",
-            "companias":   r[6] or "",
-            "auxiliares":  r[7] or "",
+            "n_polizas":   float(r[3]),
+            "n_ramos":     int(r[4]),
+            "n_companias": int(r[5]),
+            "ramos":       r[6] or "",
+            "companias":   r[7] or "",
+            "auxiliares":  r[8] or "",
         }
         for r in meta_rows
     }
@@ -248,6 +262,8 @@ def calcular_rentabilidad_clientes(
     # ── Bases de reparto para drivers ────────────────────────────────────────
     # RECIBOS: total de recibos con tomador identificado
     total_recibos_con_tomador = sum(m["n_recibos"] for m in meta.values())
+    # POLIZAS: total de pólizas con tomador identificado
+    total_polizas_con_tomador = sum(m["n_polizas"] for m in meta.values())
 
     # COMISION_NETA: sum de comisión neta directa por tomador (pre-cesión-ajuste)
     # Usamos ing_dir - ces_directo_clamped como proxy de comisión neta directa;
@@ -259,35 +275,40 @@ def calcular_rentabilidad_clientes(
 
     # ── 5a. Cesión estimada — recibos con auxiliar y sin apunte en cuenta 623* ──
     ces_est_tomador: dict[str, float] = {}
-    if tasa_cesion_estimada > 0:
-        _ces_rows = _q(db, """
-            WITH recibos_sin_cesion AS (
-                SELECT r.id AS recibo_id
-                FROM recibos r
-                WHERE r.ente IS NOT NULL
-                  AND r.id IN (
-                      SELECT DISTINCT recibo_id FROM fact_resultado_analitico
-                      WHERE ejercicio = :ej AND tipo_cuenta = 'ingreso' AND recibo_id IS NOT NULL
-                  )
-                  AND r.id NOT IN (
-                      SELECT DISTINCT recibo_id FROM fact_resultado_analitico
-                      WHERE ejercicio = :ej
-                        AND numero_cuenta LIKE '623%'
-                        AND recibo_id IS NOT NULL
-                  )
-            )
-            SELECT
-                rec.tomador,
-                COALESCE(SUM(CAST(f.importe AS FLOAT)), 0) * :tasa AS cesion_est
-            FROM fact_resultado_analitico f
-            JOIN recibos rec ON f.recibo_id = rec.id
-            JOIN recibos_sin_cesion rsc ON f.recibo_id = rsc.recibo_id
-            WHERE f.ejercicio = :ej
-              AND f.tipo_cuenta = 'ingreso'
-              AND rec.tomador IS NOT NULL
-            GROUP BY rec.tomador
-        """, ej=ejercicio, tasa=tasa_cesion_estimada)
-        ces_est_tomador = {r[0]: round(float(r[1]), 2) for r in _ces_rows if r[0]}
+    ing_est_tomador: dict[str, float] = {}
+    _ces_rows = _q(db, """
+        WITH recibos_sin_cesion AS (
+            SELECT r.id AS recibo_id
+            FROM recibos r
+            WHERE r.ente IS NOT NULL
+              AND r.id IN (
+                  SELECT DISTINCT recibo_id FROM fact_resultado_analitico
+                  WHERE ejercicio = :ej AND tipo_cuenta = 'ingreso' AND recibo_id IS NOT NULL
+              )
+              AND r.id NOT IN (
+                  SELECT DISTINCT recibo_id FROM fact_resultado_analitico
+                  WHERE ejercicio = :ej
+                    AND numero_cuenta LIKE '623%'
+                    AND recibo_id IS NOT NULL
+              )
+        ),
+    """ + TASA_AUX_CTE + f"""
+        SELECT
+            rec.tomador,
+            COALESCE(SUM(CAST(f.importe AS FLOAT) * {TASA_EXPR}), 0) AS cesion_est,
+            COALESCE(SUM(CAST(f.importe AS FLOAT)), 0)                AS ing_est
+        FROM fact_resultado_analitico f
+        JOIN recibos rec ON f.recibo_id = rec.id
+        JOIN recibos_sin_cesion rsc ON f.recibo_id = rsc.recibo_id
+        LEFT JOIN tasa_aux ta ON ta.ente = rec.ente
+        WHERE f.ejercicio = :ej
+          AND f.tipo_cuenta = 'ingreso'
+          AND rec.tomador IS NOT NULL
+        GROUP BY rec.tomador
+    """, ej=ejercicio, tasa=tasa_cesion_estimada)
+    # Cada recibo con la tasa real de su auxiliar (tasa = respaldo, ver tasa_cesion.py)
+    ces_est_tomador = {r[0]: round(float(r[1]), 2) for r in _ces_rows if r[0]}
+    ing_est_tomador = {r[0]: float(r[2]) for r in _ces_rows if r[0]}
 
     # ── 5. Construir resultado por cliente ────────────────────────────────────
     clientes_raw = []
@@ -301,12 +322,16 @@ def calcular_rentabilidad_clientes(
         n_rec = meta.get(tomador, {}).get("n_recibos", 0)
         peso_rec = n_rec / total_recibos_con_tomador if total_recibos_con_tomador > 0 else peso
 
+        # Peso POLIZAS: proporcional a número de pólizas del tomador
+        n_pol = meta.get(tomador, {}).get("n_polizas", 0)
+        peso_pol = n_pol / total_polizas_con_tomador if total_polizas_con_tomador > 0 else peso
+
         # Peso COMISION_NETA: proporcional a comisión neta directa del tomador
         cn_dir = max(0.0, ing_dir - ces_directo_clamped.get(tomador, 0.0))
         peso_cn_local = cn_dir / total_cn_directo if total_cn_directo > 0 else peso
 
         # Costes distribuidos con el driver correcto por naturaleza
-        costes_ind = round(pool_recibos * peso_rec + pool_cn * peso_cn_local, 2)
+        costes_ind = round(pool_recibos * peso_rec + pool_polizas * peso_pol + pool_cn * peso_cn_local, 2)
         costes_op  = costes_ind  # agrupado (pool_recibos incluye mkt, ya no se separa)
         costes_mkt = 0.0
 
@@ -403,8 +428,11 @@ def calcular_rentabilidad_clientes(
     # Estimación global
     total_cesion_estimada = round(sum(c["cesion_estimada"] for c in clientes), 2)
     n_con_cesion_estimada = sum(1 for c in clientes if c["tiene_cesion_estimada"])
-    # Base de ingresos sobre la que se aplica la estimación (= ces_estimada / tasa)
-    ing_estimado_base = round(total_cesion_estimada / tasa_cesion_estimada, 2) if tasa_cesion_estimada > 0 else 0.0
+    # Base de ingresos sobre la que se aplica la estimación. Con tasa por auxiliar ya no
+    # es ces_estimada / tasa: se suma el ingreso de los clientes con cesión estimada.
+    ing_estimado_base = round(sum(
+        ing_est_tomador.get(c["tomador"], 0.0) for c in clientes if c["tiene_cesion_estimada"]
+    ), 2)
 
     # Suma de per-client (para verificación de cuadre, puede diferir en centavos por redondeo)
     ebitda_calculado = round(sum(c["margen_neto"] for c in clientes), 2)

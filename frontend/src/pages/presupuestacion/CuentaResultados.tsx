@@ -113,10 +113,15 @@ function buildRows(data: any): PLRow[] {
   // ── GASTOS OPERATIVOS ─────────────────────────────────────────────────────
   rows.push({ key: 's-gto', concepto: 'GASTOS OPERATIVOS (excl. amortizaciones y gastos financieros)', ppto: null, base: null, desviacion: null, pct: null, kind: 'section' })
   for (const f of (data.gastos_operativos || [])) {
-    const normV = f.concepto === 'Cesiones a auxiliares' ? (nb.cesion_normalizada ?? null) : null
+    // Normalizado solo donde difiere del real: cesiones (cesión normalizada) y las
+    // familias con ajuste de coste del analítico (p. ej. Personal adscrito a un auxiliar).
+    const famNorm = nb.gastos_por_familia?.[f.concepto]
+    const normV = f.concepto === 'Cesiones a auxiliares'
+      ? (nb.cesion_normalizada ?? null)
+      : (famNorm != null && Math.abs(famNorm - (f.base ?? 0)) > 0.005 ? famNorm : null)
     add(`gto-${f.concepto}`, f.concepto, f, 'detail', false, true, normV)
   }
-  add('tot-gto', 'TOTAL GASTOS OPERATIVOS', data.total_gastos_operativos, 'subtotal', false)
+  add('tot-gto', 'TOTAL GASTOS OPERATIVOS', data.total_gastos_operativos, 'subtotal', false, false, nb.total_gastos_operativos ?? null)
   spacer('sp2')
 
   // ── EBITDA ────────────────────────────────────────────────────────────────

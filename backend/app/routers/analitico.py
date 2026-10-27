@@ -161,10 +161,21 @@ def recalcular_estado(
 
 # ── Dashboards ────────────────────────────────────────────────────────────────
 
+@router.get("/tasa-cesion-real")
+def get_tasa_cesion_real(
+    ejercicio: int = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Tasa real de cesión del ejercicio: la que se aplica por defecto a la cesión estimada."""
+    from ..services.tasa_cesion import detalle_tasa_cesion_real
+    return detalle_tasa_cesion_real(db, ejercicio)
+
+
 @router.get("/conciliacion")
 def conciliacion_analitica(
     ejercicio: int = Query(...),
-    tasa: float = Query(0.40, ge=0.0, le=1.0, description="Tasa de cesión estimada 0–1. Default 40%."),
+    tasa: float | None = Query(None, ge=0.0, le=1.0, description="Tasa de cesión estimada 0–1. Sin informar: tasa real del ejercicio."),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -175,7 +186,7 @@ def conciliacion_analitica(
 @router.get("/dashboard/ejecutivo")
 def dash_ejecutivo(
     ejercicio: int = Query(...),
-    tasa: float = Query(0.40, ge=0.0, le=1.0),
+    tasa: float | None = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -185,7 +196,7 @@ def dash_ejecutivo(
 @router.get("/dashboard/compania")
 def dash_compania(
     ejercicio: int = Query(...),
-    tasa: float = Query(0.40, ge=0.0, le=1.0),
+    tasa: float | None = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -195,7 +206,7 @@ def dash_compania(
 @router.get("/dashboard/auxiliar")
 def dash_auxiliar(
     ejercicio: int = Query(...),
-    tasa: float = Query(0.40, ge=0.0, le=1.0),
+    tasa: float | None = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -205,7 +216,7 @@ def dash_auxiliar(
 @router.get("/dashboard/ramo")
 def dash_ramo(
     ejercicio: int = Query(...),
-    tasa: float = Query(0.40, ge=0.0, le=1.0),
+    tasa: float | None = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -216,7 +227,7 @@ def dash_ramo(
 def dash_subramo(
     ejercicio: int = Query(...),
     ramo: Optional[str] = Query(None, description="Filtrar por ramo. Sin valor devuelve todos."),
-    tasa: float = Query(0.40, ge=0.0, le=1.0),
+    tasa: float | None = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -226,7 +237,7 @@ def dash_subramo(
 @router.get("/dashboard/nueva-produccion")
 def dash_nueva_produccion(
     ejercicio: int = Query(...),
-    tasa: float = Query(0.40, ge=0.0, le=1.0),
+    tasa: float | None = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -236,7 +247,7 @@ def dash_nueva_produccion(
 @router.get("/dashboard/operaciones")
 def dash_operaciones(
     ejercicio: int = Query(...),
-    tasa: float = Query(0.40, ge=0.0, le=1.0),
+    tasa: float | None = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -445,7 +456,7 @@ def debug_cesion(
 @router.get("/dashboard/costes")
 def dash_costes(
     ejercicio: int = Query(...),
-    tasa: float = Query(0.40, ge=0.0, le=1.0),
+    tasa: float | None = Query(None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

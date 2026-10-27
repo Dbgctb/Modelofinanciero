@@ -13,11 +13,12 @@ const { Title, Text } = Typography
 const NATURALEZAS = [
   'Personal', 'Alquiler', 'Tecnología', 'Marketing', 'Financiero',
   'Bancos', 'Servicios profesionales', 'Comunicaciones', 'Viajes',
-  'Impuestos', 'Suministros', 'Cesión auxiliar',
+  'Impuestos', 'Seguros', 'Suministros', 'Cesión auxiliar',
 ]
-const DRIVERS = ['RECIBOS', 'COMISION_NETA', 'NUEVA_PRODUCCION']
+const DRIVERS = ['RECIBOS', 'POLIZAS', 'COMISION_NETA', 'NUEVA_PRODUCCION']
 const DRIVER_LABELS: Record<string, string> = {
   RECIBOS: 'Recibos (volumen)',
+  POLIZAS: 'Pólizas (gestión)',
   COMISION_NETA: 'Comisión neta (€)',
   NUEVA_PRODUCCION: 'Nueva producción (€)',
 }
@@ -25,7 +26,7 @@ const NAT_COLOR: Record<string, string> = {
   'Personal': 'blue', 'Alquiler': 'orange', 'Tecnología': 'cyan',
   'Marketing': 'purple', 'Financiero': 'geekblue', 'Bancos': 'geekblue',
   'Servicios profesionales': 'gold', 'Comunicaciones': 'lime',
-  'Viajes': 'green', 'Impuestos': 'magenta', 'Suministros': 'volcano',
+  'Viajes': 'green', 'Impuestos': 'magenta', 'Seguros': 'pink', 'Suministros': 'volcano',
   'Cesión auxiliar': 'red',
 }
 
@@ -199,7 +200,7 @@ function TabMapDrivers() {
       <Alert
         type="info"
         showIcon
-        message="Define cómo se reparten los costes indirectos (sin recibo) de cada naturaleza. RECIBOS = por volumen de recibos; COMISION_NETA = proporcional a comisión neta; NUEVA_PRODUCCIÓN = sólo entre pólizas nuevas."
+        message="Define cómo se reparten los costes indirectos (sin recibo) de cada naturaleza. RECIBOS = por número de recibos; PÓLIZAS = por número de pólizas (una póliza mensual pesa lo mismo que una anual; una intermediada pesa 0,49 frente a 1 de una directa, porque el auxiliar hace parte de la gestión); COMISION_NETA = proporcional a comisión neta; NUEVA_PRODUCCIÓN = sólo entre pólizas nuevas."
         style={{ marginBottom: 16 }}
       />
       <Table

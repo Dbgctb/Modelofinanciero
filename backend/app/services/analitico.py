@@ -16,10 +16,13 @@ from ..models.analitico import (
     AnaliticoMapCuenta, AnaliticoMapDriver, AnaliticoAjusteCoste,
     FactResultadoAnalitico,
     DRIVERS_DEFAULT, NATURALEZAS_COSTE_OP,
+    NATURALEZA_RESULTADO_FINANCIERO, PREFIJOS_RESULTADO_FINANCIERO,
+    PESO_POLIZA_INTERMEDIADA,
 )
 from ..models.diario import DiarioApunte, TipoCuenta, EstadoApunte
 from ..models.recibo import Recibo
 from .normalizer import extraer_codigo_recibo
+from .tasa_cesion import resolver_tasa, TASA_AUX_CTE, TASA_EXPR
 
 log = logging.getLogger(__name__)
 
@@ -167,11 +170,22 @@ def _compute_weights(recibos_list, driver: str) -> dict:
     Devuelve dict con pesos normalizados que suman 1.
     """
     totals: dict[tuple, float] = defaultdict(float)
+    # POLIZAS: cada póliza suma 1 (PESO_POLIZA_INTERMEDIADA si tiene auxiliar),
+    # repartido entre sus recibos del ejercicio (una póliza mensual con 12 recibos
+    # pesa lo mismo que una anual con 1). Un recibo sin número de póliza cuenta como
+    # una póliza propia.
+    recibos_por_poliza: dict[str, int] = defaultdict(int)
+    if driver == 'POLIZAS':
+        for r in recibos_list:
+            recibos_por_poliza[r.numero_poliza or f"_rec_{r.id}"] += 1
     for r in recibos_list:
         es_np = (r.tipo_negocio == 'nueva_produccion')
         key = (_norm_compania(r.compania), r.ramo, r.subramo, r.ente, es_np)
         if driver == 'RECIBOS':
             totals[key] += 1.0
+        elif driver == 'POLIZAS':
+            peso_canal = PESO_POLIZA_INTERMEDIADA if r.ente else 1.0
+            totals[key] += peso_canal / recibos_por_poliza[r.numero_poliza or f"_rec_{r.id}"]
         elif driver == 'COMISION_NETA':
             totals[key] += float(r.liqui or 0)
         elif driver == 'NUEVA_PRODUCCION':
@@ -237,6 +251,7 @@ def _recalcular_worker(db: Session, ejercicio: int, task_id: str):
         # tras procesar las filas directas), para evitar distorsión por recibos.liqui.
         weights_cache = {
             'RECIBOS':          _compute_weights(recibos_list, 'RECIBOS'),
+            'POLIZAS':          _compute_weights(recibos_list, 'POLIZAS'),
             'NUEVA_PRODUCCION': _compute_weights(recibos_list, 'NUEVA_PRODUCCION'),
             'COMISION_NETA':    {},   # se rellena tras procesar ingresos directos
         }
@@ -314,6 +329,8 @@ def _recalcular_worker(db: Session, ejercicio: int, task_id: str):
                         # exactamente con el diario. En los dashboards aparece como
                         # "(Sin auxiliar)" en el desglose por auxiliar.
                         naturaleza = 'Cesión auxiliar'
+                elif ap.numero_cuenta and ap.numero_cuenta.startswith(PREFIJOS_RESULTADO_FINANCIERO):
+                    naturaleza = NATURALEZA_RESULTADO_FINANCIERO
                 else:
                     naturaleza = _lookup_naturaleza(ap.numero_cuenta, map_nat)
                 driver = map_drv.get(naturaleza, 'RECIBOS') if naturaleza else 'RECIBOS'
@@ -499,6 +516,11 @@ def _recalcular_worker(db: Session, ejercicio: int, task_id: str):
                 _prog(task_id, 5, 6,
                       f"Guardando… {min(i + _BATCH, total_rows):,}/{total_rows:,} filas")
         db.commit()
+        # Estadísticas al día tras reescribir ~200k filas: sin esto el planificador
+        # usa las de antes y las consultas de cesión estimada (tasa por auxiliar)
+        # pasaban de 0,3 s a más de 25 minutos (visto en vivo 2026-10-27).
+        db.execute(_text("ANALYZE fact_resultado_analitico"))
+        db.commit()
 
         _prog(task_id, 6, 6,
               f"Completado: {total_rows:,} filas ({len(apuntes):,} apuntes, "
@@ -604,8 +626,6 @@ def _cesion_estimada_por_dim(
     que el total agregado de cesión sea 0 — detecta recibos individuales sin pagar.
     """
     assert dimension in {'compania', 'ramo', 'subramo', 'auxiliar'}, f"Dimensión no soportada: {dimension}"
-    if tasa <= 0:
-        return {}
 
     if dimension == 'subramo':
         select_col = "f.ramo, COALESCE(f.subramo, '(Sin subramo)')"
@@ -623,16 +643,19 @@ def _cesion_estimada_por_dim(
         group_col  = f"f.{dimension}"
         dim_filter = f"AND f.{dimension} IS NOT NULL"
 
-    params: dict = {"ej": ejercicio}
+    params: dict = {"ej": ejercicio, "tasa": tasa}
     if ramo_filtro:
         params["ramo"] = ramo_filtro
 
+    # Cada recibo se estima con la tasa real de su auxiliar (tasa = respaldo).
     sql = _CES_EST_CTE + f"""
         SELECT
             {select_col},
-            COALESCE(SUM(CAST(f.importe AS FLOAT)), 0) AS ing_sin_ces
+            COALESCE(SUM(CAST(f.importe AS FLOAT) * {TASA_EXPR}), 0) AS ces_est
         FROM fact_resultado_analitico f
         JOIN recibos_sin_cesion_directa rsc ON f.recibo_id = rsc.recibo_id
+        JOIN recibos rec ON rec.id = f.recibo_id
+        LEFT JOIN tasa_aux ta ON ta.ente = rec.ente
         WHERE f.ejercicio = :ej
           AND f.tipo_cuenta = 'ingreso'
           {dim_filter}
@@ -642,9 +665,9 @@ def _cesion_estimada_por_dim(
     rows = db.execute(_text(sql), params).fetchall()
 
     if dimension == 'subramo':
-        return {(r[0], r[1]): round(float(r[2]) * tasa, 2) for r in rows}
+        return {(r[0], r[1]): round(float(r[2]), 2) for r in rows}
     else:
-        return {r[0]: round(float(r[1]) * tasa, 2) for r in rows if r[0] is not None}
+        return {r[0]: round(float(r[1]), 2) for r in rows if r[0] is not None}
 
 
 # SQL reutilizable: recibos con auxiliar, con ingreso en el ejercicio y sin cuenta 623*.
@@ -664,8 +687,8 @@ _CES_EST_CTE = """
               FROM fact_resultado_analitico
               WHERE ejercicio = :ej AND numero_cuenta LIKE '623%' AND recibo_id IS NOT NULL
           )
-    )
-"""
+    ),
+""" + TASA_AUX_CTE
 
 
 def _cesion_estimada_global(db: Session, ejercicio: int, tasa: float) -> tuple[float, int]:
@@ -675,8 +698,6 @@ def _cesion_estimada_global(db: Session, ejercicio: int, tasa: float) -> tuple[f
     (equivalente al filtro ingreso_bruto >= min_comision=0 de rentabilidad).
     Retorna (cesion_estimada_total, n_tomadores).
     """
-    if tasa <= 0:
-        return 0.0, 0
     rows = _q(db, """
         WITH recibos_sin_cesion AS (
             SELECT r.id AS recibo_id
@@ -701,14 +722,16 @@ def _cesion_estimada_global(db: Session, ejercicio: int, tasa: float) -> tuple[f
               AND r.tomador IS NOT NULL AND r.tomador != ''
             GROUP BY r.tomador
             HAVING COALESCE(SUM(CAST(f.importe AS FLOAT)), 0) >= 0
-        )
+        ),
+    """ + TASA_AUX_CTE + f"""
         SELECT
             rec.tomador,
-            COALESCE(SUM(CAST(f.importe AS FLOAT)), 0) * :tasa AS cesion_est
+            COALESCE(SUM(CAST(f.importe AS FLOAT) * {TASA_EXPR}), 0) AS cesion_est
         FROM fact_resultado_analitico f
         JOIN recibos rec ON f.recibo_id = rec.id
         JOIN recibos_sin_cesion rsc ON f.recibo_id = rsc.recibo_id
         JOIN tomadores_con_ingreso_positivo tip ON rec.tomador = tip.tomador
+        LEFT JOIN tasa_aux ta ON ta.ente = rec.ente
         WHERE f.ejercicio = :ej
           AND f.tipo_cuenta = 'ingreso'
           AND rec.tomador IS NOT NULL
@@ -843,6 +866,40 @@ def _add_costes_contable(db, ejercicio: int, items: list[dict]) -> None:
         m["margen_pct_contable"] = round(ebitda_cont / bruta * 100, 2) if bruta else 0.0
 
 
+def _add_por_poliza(db, ejercicio: int, items: list[dict], campo: str, sin_valor: str) -> None:
+    """
+    Economía por póliza de cada entidad (vista normalizada): pólizas con ingreso en el
+    ejercicio, comisión, neta (tras cesión normalizada), coste y resultado por póliza,
+    y la comisión mínima por póliza para no perder dinero con su % de cesión:
+        comisión mínima = coste por póliza / (1 − % cesión)
+    campo: 'compania' | 'auxiliar' | 'ramo' (columna del fact y clave del item).
+    """
+    assert campo in {'compania', 'auxiliar', 'ramo'}
+    rows = db.execute(_text(f"""
+        SELECT f.{campo}, COUNT(DISTINCT COALESCE(r.numero_poliza, r.id::text))
+        FROM fact_resultado_analitico f
+        JOIN recibos r ON r.id = f.recibo_id
+        WHERE f.ejercicio = :ej AND f.tipo_cuenta = 'ingreso'
+        GROUP BY f.{campo}
+    """), {"ej": ejercicio}).fetchall()
+    n_por_valor = {(r[0] or sin_valor): int(r[1]) for r in rows}
+    for m in items:
+        n = n_por_valor.get(m.get(campo), 0)
+        bruta = m.get("comision_bruta", 0.0)
+        ces = m.get("cesion_normalizada", m.get("comision_auxiliar", 0.0))
+        coste = m.get("costes_operativos", 0.0) + m.get("costes_captacion", 0.0) + m.get("sin_mapear", 0.0)
+        pct_ces = ces / bruta if bruta > 0 else 0.0
+        coste_pol = coste / n if n else None
+        m["n_polizas"]              = n
+        m["comision_por_poliza"]    = round(bruta / n, 2) if n else None
+        m["neta_por_poliza"]        = round((bruta - ces) / n, 2) if n else None
+        m["coste_por_poliza"]       = round(coste_pol, 2) if coste_pol is not None else None
+        m["resultado_por_poliza"]   = round(m.get("ebitda_normalizado", 0.0) / n, 2) if n else None
+        m["comision_minima_poliza"] = (
+            round(coste_pol / (1 - pct_ces), 2) if coste_pol is not None and pct_ces < 1 else None
+        )
+
+
 _PL_SQL = """
     SELECT tipo_cuenta, naturaleza, COALESCE(SUM(CAST(importe AS FLOAT)),0)
     FROM fact_resultado_analitico
@@ -851,27 +908,30 @@ _PL_SQL = """
 """
 
 
-def dashboard_ejecutivo(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40) -> dict:
+def dashboard_ejecutivo(db: Session, ejercicio: int, tasa_cesion_estimada: float | None = None) -> dict:
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     pl_rows = _q(db, _PL_SQL.format(extra=""), ej=ejercicio)
     if not pl_rows:
         return {"sin_datos": True}
 
     resumen = _calc_pl(pl_rows)
 
-    # Cesión contable = solo cuentas 623* (los AjustesCoste son puramente analíticos).
-    ces_row = _q(db, """
-        SELECT COALESCE(SUM(-CAST(importe AS FLOAT)) FILTER (WHERE numero_cuenta LIKE '623%%'), 0)
-        FROM fact_resultado_analitico
-        WHERE ejercicio = :ej
-    """, ej=ejercicio)
-    ces_contable = round(float((ces_row or [[0.0]])[0][0] or 0.0), 2)
+    # Columna contable: del diario, con la MISMA función que la Cuenta de Resultados del
+    # presupuesto, para que ambas cuadren al céntimo. El fact no sirve para esto: recorta
+    # la cesión de auxiliares cuya cesión supera sus ingresos (_cap_cesion_rows) y arrastra
+    # céntimos del reparto por recibo.
+    from .cuenta_resultados import pl_contable_ejercicio
+    pl_cont = pl_contable_ejercicio(db, ejercicio)
+    ces_contable = round(pl_cont["total_cesiones"], 2)
+    resumen["comision_bruta"]    = round(pl_cont["total_ingresos"], 2)
     resumen["comision_auxiliar"] = ces_contable
     resumen["comision_neta"]     = round(resumen["comision_bruta"] - ces_contable, 2)
     resumen["ratio_cesion_pct"]  = round(ces_contable / resumen["comision_bruta"] * 100, 2) if resumen["comision_bruta"] else 0.0
 
     # AjusteCoste: solo reduce el pool 640/642 en el modelo analítico (no crea fila de cesión).
-    # costes_operativos del resumen = valor analítico (pool reducido por AJ).
-    # costes_op_contable = analítico + AJ = valor real del diario 640/642.
+    # costes_op_contable = gasto operativo real del diario (sin cesión; captación y sin
+    # mapear van aparte, implícitos en el EBITDA). costes_operativos = vista normalizada,
+    # sin el AJ (ese coste ya está en la cesión estimada del auxiliar).
     _aj_total = round(sum(
         float(aj.importe_mensual) * 12
         for aj in db.query(AnaliticoAjusteCoste).filter(
@@ -879,14 +939,12 @@ def dashboard_ejecutivo(db: Session, ejercicio: int, tasa_cesion_estimada: float
             AnaliticoAjusteCoste.activo == True,
         ).all()
     ), 2)
-    resumen["costes_op_contable"]  = round(resumen["costes_operativos"] + _aj_total, 2)
-    # Fórmula directa: válida tanto si el modelo ya fue recalculado como si no.
-    # Con fact antiguo _calc_pl.ebitda ya tiene AJ como cesión deducida; con fact nuevo
-    # lo tiene como reducción de pool. La resta directa siempre da el valor contable real.
-    resumen["ebitda_contable"]     = round(
-        resumen["comision_bruta"] - ces_contable - resumen["costes_op_contable"]
+    resumen["costes_op_contable"]  = round(
+        pl_cont["total_gastos_operativos"] - ces_contable
         - resumen["costes_captacion"] - resumen["sin_mapear"], 2
     )
+    resumen["costes_operativos"]   = round(resumen["costes_op_contable"] - _aj_total, 2)
+    resumen["ebitda_contable"]     = pl_cont["ebitda"]
     resumen["margen_pct_contable"] = round(resumen["ebitda_contable"] / resumen["comision_bruta"] * 100, 2) if resumen["comision_bruta"] else 0.0
     resumen["ratio_costes_op_pct"]      = round(resumen["costes_op_contable"] / resumen["comision_bruta"] * 100, 2) if resumen["comision_bruta"] else 0.0
     resumen["ratio_costes_op_pct_norm"] = round(resumen["costes_operativos"]  / resumen["comision_bruta"] * 100, 2) if resumen["comision_bruta"] else 0.0
@@ -918,7 +976,7 @@ def dashboard_ejecutivo(db: Session, ejercicio: int, tasa_cesion_estimada: float
 
     nat_totals: dict[str, float] = defaultdict(float)
     for row in pl_rows:
-        if row[0] == 'gasto' and row[1]:
+        if row[0] == 'gasto' and row[1] and row[1] != NATURALEZA_RESULTADO_FINANCIERO:
             nat_totals[row[1]] += float(row[2])
     total_costes = sum(-v for v in nat_totals.values())
     costes_naturaleza = sorted(
@@ -1012,10 +1070,20 @@ def dashboard_ejecutivo(db: Session, ejercicio: int, tasa_cesion_estimada: float
     resumen["pct_con_auxiliar"]  = pct_auxiliar
     resumen["pct_sin_auxiliar"]  = pct_directo
 
+    # Cesión sobre el negocio que paga cesión (intermediado). Separa el "precio" del
+    # auxiliar del peso del canal: ratio de cesión = % intermediado × esta tasa.
+    from .tasa_cesion import detalle_tasa_cesion_real
+    resumen["tasa_cesion_aplicada_pct"]   = round(tasa_cesion_estimada * 100, 2)
+    resumen["tasa_cesion_real"]           = detalle_tasa_cesion_real(db, ejercicio)
+    resumen["cesion_s_intermediado_pct"]  = (
+        round(ces_norm / ing_con_aux * 100, 2) if ing_con_aux else 0.0
+    )
+
     return {"resumen": resumen, "mensual": mensual, "waterfall": waterfall, "costes_naturaleza": costes_naturaleza}
 
 
-def dashboard_compania(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40) -> dict:
+def dashboard_compania(db: Session, ejercicio: int, tasa_cesion_estimada: float | None = None) -> dict:
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     comp_rows = _q(db, """
         SELECT compania, tipo_cuenta, naturaleza, COALESCE(SUM(CAST(importe AS FLOAT)),0)
         FROM fact_resultado_analitico WHERE ejercicio = :ej
@@ -1088,6 +1156,7 @@ def dashboard_compania(db: Session, ejercicio: int, tasa_cesion_estimada: float 
     ces_norm_g, _, _, _ = _calc_cesion_normalizada(db, ejercicio, tasa_cesion_estimada)
     _rescale_norm(companias, ces_norm_g)
     _add_costes_contable(db, ejercicio, companias)
+    _add_por_poliza(db, ejercicio, companias, "compania", "(Sin compañía)")
 
     top5 = [c["compania"] for c in sorted(companias, key=lambda x: -x["comision_bruta"])[:5]]
 
@@ -1112,7 +1181,8 @@ def dashboard_compania(db: Session, ejercicio: int, tasa_cesion_estimada: float 
     return {"companias": companias, "mensual": mensual, "top5": top5}
 
 
-def dashboard_auxiliar(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40) -> dict:
+def dashboard_auxiliar(db: Session, ejercicio: int, tasa_cesion_estimada: float | None = None) -> dict:
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     aux_rows = _q(db, """
         SELECT auxiliar, tipo_cuenta, naturaleza, COALESCE(SUM(CAST(importe AS FLOAT)),0)
         FROM fact_resultado_analitico WHERE ejercicio = :ej
@@ -1152,6 +1222,7 @@ def dashboard_auxiliar(db: Session, ejercicio: int, tasa_cesion_estimada: float 
     ces_norm_g, _, _, _ = _calc_cesion_normalizada(db, ejercicio, tasa_cesion_estimada)
     _rescale_norm(auxiliares, ces_norm_g)
     _add_costes_contable(db, ejercicio, auxiliares)
+    _add_por_poliza(db, ejercicio, auxiliares, "auxiliar", "(Sin auxiliar)")
 
     top5 = [a["auxiliar"] for a in sorted(auxiliares, key=lambda x: -x["comision_bruta"])[:5]]
 
@@ -1176,7 +1247,8 @@ def dashboard_auxiliar(db: Session, ejercicio: int, tasa_cesion_estimada: float 
     return {"auxiliares": auxiliares, "mensual": mensual, "top5": top5}
 
 
-def dashboard_ramo(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40) -> dict:
+def dashboard_ramo(db: Session, ejercicio: int, tasa_cesion_estimada: float | None = None) -> dict:
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     ramo_rows = _q(db, """
         SELECT ramo, tipo_cuenta, naturaleza, COALESCE(SUM(CAST(importe AS FLOAT)),0)
         FROM fact_resultado_analitico WHERE ejercicio = :ej
@@ -1250,6 +1322,7 @@ def dashboard_ramo(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.
     ces_norm_g, _, _, _ = _calc_cesion_normalizada(db, ejercicio, tasa_cesion_estimada)
     _rescale_norm(ramos, ces_norm_g)
     _add_costes_contable(db, ejercicio, ramos)
+    _add_por_poliza(db, ejercicio, ramos, "ramo", "(Sin ramo)")
 
     heatmap_rows = _q(db, """
         SELECT compania, ramo, COALESCE(SUM(CAST(importe AS FLOAT)),0)
@@ -1263,11 +1336,12 @@ def dashboard_ramo(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.
     return {"ramos": ramos, "heatmap": heatmap}
 
 
-def dashboard_subramo(db: Session, ejercicio: int, ramo: str | None = None, tasa_cesion_estimada: float = 0.40) -> dict:
+def dashboard_subramo(db: Session, ejercicio: int, ramo: str | None = None, tasa_cesion_estimada: float | None = None) -> dict:
     """
     Desglose por subramo. Si se pasa ramo, filtra solo ese ramo (ej: 'Multirriesgos').
     Sin filtro devuelve todos los subramos con su ramo padre.
     """
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     extra_filter = "AND ramo = :ramo" if ramo else ""
     params = {"ej": ejercicio, **({"ramo": ramo} if ramo else {})}
 
@@ -1381,7 +1455,8 @@ def dashboard_subramo(db: Session, ejercicio: int, ramo: str | None = None, tasa
     return {"subramos": result, "ramo_filtro": ramo}
 
 
-def dashboard_nueva_produccion(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40) -> dict:
+def dashboard_nueva_produccion(db: Session, ejercicio: int, tasa_cesion_estimada: float | None = None) -> dict:
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     np_rows = _q(db, """
         SELECT es_nueva_produccion, tipo_cuenta, naturaleza, COALESCE(SUM(CAST(importe AS FLOAT)),0)
         FROM fact_resultado_analitico WHERE ejercicio = :ej
@@ -1418,15 +1493,16 @@ def dashboard_nueva_produccion(db: Session, ejercicio: int, tasa_cesion_estimada
     ]
     # Cesión estimada por segmento: misma regla SQL — recibo con auxiliar sin 623* directo
     np_ces_map: dict[bool, float] = {}
-    if tasa_cesion_estimada > 0:
-        _np_rows = _q(db, _CES_EST_CTE + """
-            SELECT f.es_nueva_produccion, COALESCE(SUM(CAST(f.importe AS FLOAT)), 0)
-            FROM fact_resultado_analitico f
-            JOIN recibos_sin_cesion_directa rsc ON f.recibo_id = rsc.recibo_id
-            WHERE f.ejercicio = :ej AND f.tipo_cuenta = 'ingreso'
-            GROUP BY f.es_nueva_produccion
-        """, ej=ejercicio)
-        np_ces_map = {bool(r[0]): round(float(r[1]) * tasa_cesion_estimada, 2) for r in _np_rows}
+    _np_rows = _q(db, _CES_EST_CTE + f"""
+        SELECT f.es_nueva_produccion, COALESCE(SUM(CAST(f.importe AS FLOAT) * {TASA_EXPR}), 0)
+        FROM fact_resultado_analitico f
+        JOIN recibos_sin_cesion_directa rsc ON f.recibo_id = rsc.recibo_id
+        JOIN recibos rec ON rec.id = f.recibo_id
+        LEFT JOIN tasa_aux ta ON ta.ente = rec.ente
+        WHERE f.ejercicio = :ej AND f.tipo_cuenta = 'ingreso'
+        GROUP BY f.es_nueva_produccion
+    """, ej=ejercicio, tasa=tasa_cesion_estimada)
+    np_ces_map = {bool(r[0]): round(float(r[1]), 2) for r in _np_rows}
 
     ces_dir_np = _cesion_directa_por_dim(db, ejercicio, 'es_nueva_produccion')
 
@@ -1473,7 +1549,8 @@ def dashboard_nueva_produccion(db: Session, ejercicio: int, tasa_cesion_estimada
     }
 
 
-def dashboard_operaciones(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40) -> dict:
+def dashboard_operaciones(db: Session, ejercicio: int, tasa_cesion_estimada: float | None = None) -> dict:
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     pl_rows = _q(db, _PL_SQL.format(extra=""), ej=ejercicio)
     if not pl_rows:
         return {"sin_datos": True}
@@ -1612,7 +1689,8 @@ def dashboard_operaciones(db: Session, ejercicio: int, tasa_cesion_estimada: flo
     }
 
 
-def dashboard_costes(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40) -> dict:
+def dashboard_costes(db: Session, ejercicio: int, tasa_cesion_estimada: float | None = None) -> dict:
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     pl_rows = _q(db, _PL_SQL.format(extra=""), ej=ejercicio)
     if not pl_rows:
         return {"sin_datos": True}
@@ -1623,8 +1701,9 @@ def dashboard_costes(db: Session, ejercicio: int, tasa_cesion_estimada: float = 
         SELECT naturaleza, tipo_imputacion, COALESCE(SUM(CAST(importe AS FLOAT)),0)
         FROM fact_resultado_analitico
         WHERE ejercicio = :ej AND tipo_cuenta = 'gasto' AND naturaleza IS NOT NULL
+          AND naturaleza <> :nat_fin
         GROUP BY naturaleza, tipo_imputacion
-    """, ej=ejercicio)
+    """, ej=ejercicio, nat_fin=NATURALEZA_RESULTADO_FINANCIERO)
 
     nat_data: dict[str, dict] = defaultdict(lambda: {"importe": 0.0, "directa": 0.0, "indirecta": 0.0})
     for r in nat_imp_rows:
@@ -1718,11 +1797,12 @@ def dashboard_costes(db: Session, ejercicio: int, tasa_cesion_estimada: float = 
 
 # ── Conciliación ─────────────────────────────────────────────────────────────
 
-def conciliacion(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40) -> dict:
+def conciliacion(db: Session, ejercicio: int, tasa_cesion_estimada: float | None = None) -> dict:
     """
     Comprueba la coherencia entre el diario contable, el modelo analítico y la
     cuenta de resultados del presupuesto que usa este ejercicio como base real.
     """
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
     from ..models.presupuesto import Presupuesto
     from .cuenta_resultados import calcular_cuenta_resultados
 
@@ -1737,8 +1817,11 @@ def conciliacion(db: Session, ejercicio: int, tasa_cesion_estimada: float = 0.40
                                     'costes_captacion', 'margen_pct', 'ebitda', 'sin_mapear']}
         an_sin_mapear = 0.0
 
+    # Resultado financiero (66*) no está en el EBITDA pero sí en Σ 6* del diario.
+    an_financiero = -sum(float(r[2]) for r in an_rows
+                         if r[0] == 'gasto' and r[1] == NATURALEZA_RESULTADO_FINANCIERO)
     an_total_costes = (an_pl["costes_operativos"] + an_pl["comision_auxiliar"]
-                       + an_pl["costes_captacion"] + an_sin_mapear)
+                       + an_pl["costes_captacion"] + an_sin_mapear + an_financiero)
 
     # _calc_pl ya incluye sin_mapear en ebitda — no hay que corregir
     an_ebitda_real = an_pl["ebitda"]
@@ -2508,7 +2591,7 @@ _FAMILIA_A_NATURALEZA: dict[str, str | None] = {
     "Renting":                 "Alquiler",
     "Otros Servicios":         "Servicios profesionales",
     "Reparaciones":            "Servicios profesionales",
-    "Seguros":                 "Impuestos",
+    "Seguros":                 "Seguros",   # 625 primas de seguros: no es un impuesto
     "Financieros":             "Financiero",
     "Relaciones Publicas":     "Marketing",
     "Relaciones Públicas":     "Marketing",

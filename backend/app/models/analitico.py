@@ -20,24 +20,41 @@ NATURALEZAS = [
     "Comunicaciones",
     "Viajes",
     "Impuestos",
+    "Seguros",
     "Suministros",
     "Cesión auxiliar",
 ]
 
-DRIVERS = ["RECIBOS", "COMISION_NETA", "NUEVA_PRODUCCION"]
+# POLIZAS: cada póliza pesa lo mismo, tenga 1 recibo (anual) o 12 (mensual). Con
+# RECIBOS una póliza mensual absorbía 12 veces más coste de gestión: en 2025 Salud
+# (Asistencia Sanitaria) era el 30,8% de los recibos pero el 5,9% de las pólizas y
+# el 5,4% de la comisión, y recibía 52.236 € de Personal sobre 23.976 € de comisión.
+DRIVERS = ["RECIBOS", "POLIZAS", "COMISION_NETA", "NUEVA_PRODUCCION"]
 
-# Driver por defecto para cada naturaleza
+# Peso de una póliza INTERMEDIADA (con auxiliar) frente a una DIRECTA (1,0) en el
+# driver POLIZAS: el auxiliar hace parte de la gestión con el cliente, así que
+# consume menos tiempo de la correduría. Calibrado con datos 2025 para que el
+# negocio directo no supere un 30% de margen EBITDA normalizado (decisión del
+# usuario 2026-10-27): con 1,0 salía un 58,3%; con 0,49 sale un 29,4%
+# (≈ 63 € de gestión por póliza directa y 31 € por intermediada).
+PESO_POLIZA_INTERMEDIADA = 0.49
+
+# Driver por defecto para cada naturaleza (revisión con datos 2025, decisión del
+# usuario 2026-10-26): gestión → POLIZAS; estructura → COMISION_NETA.
 DRIVERS_DEFAULT: dict[str, str] = {
-    "Personal":               "RECIBOS",
+    "Personal":               "POLIZAS",
     "Alquiler":               "COMISION_NETA",
     "Tecnología":             "RECIBOS",
     "Marketing":              "NUEVA_PRODUCCION",
-    "Financiero":             "RECIBOS",
+    # Comisiones bancarias (626): el 95,6% de los recibos los cobra la compañía, no
+    # el banco de la correduría; es coste de estructura, no de volumen de recibos.
+    "Financiero":             "COMISION_NETA",
     "Bancos":                 "RECIBOS",
-    "Servicios profesionales":"RECIBOS",
-    "Comunicaciones":         "RECIBOS",
+    "Servicios profesionales":"POLIZAS",
+    "Comunicaciones":         "POLIZAS",
     "Viajes":                 "COMISION_NETA",
     "Impuestos":              "COMISION_NETA",
+    "Seguros":                "COMISION_NETA",
     "Suministros":            "COMISION_NETA",
     "Cesión auxiliar":        "COMISION_NETA",
 }
@@ -46,8 +63,17 @@ DRIVERS_DEFAULT: dict[str, str] = {
 NATURALEZAS_COSTE_OP = {
     "Personal", "Alquiler", "Tecnología", "Financiero",
     "Bancos", "Servicios profesionales", "Comunicaciones",
-    "Viajes", "Impuestos", "Suministros",
+    "Viajes", "Impuestos", "Seguros", "Suministros",
 }
+
+# Gastos financieros (intereses, cuentas 66*): van DEBAJO del EBITDA, igual que en
+# la Cuenta de Resultados del presupuesto (EBITDA → amort. → EBIT → financieros → BAI).
+# El recálculo les asigna esta naturaleza por cuenta, con independencia del mapeo
+# (la naturaleza "Financiero" del mapeo también agrupa las comisiones bancarias 626,
+# que sí son gasto operativo). No está en NATURALEZAS_COSTE_OP, así que _calc_pl no
+# la cuenta en el EBITDA. Decisión del usuario 2026-10-25.
+NATURALEZA_RESULTADO_FINANCIERO = "Resultado financiero"
+PREFIJOS_RESULTADO_FINANCIERO = ("66",)
 
 
 class AnaliticoMapCuenta(Base):

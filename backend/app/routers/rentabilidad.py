@@ -8,7 +8,6 @@ from ..services.rentabilidad_cliente import (
     ejercicios_disponibles,
     recibos_por_cliente,
     MIN_COMISION_DEFAULT,
-    TASA_CESION_ESTIMADA_DEFAULT,
 )
 
 router = APIRouter(prefix="/rentabilidad", tags=["rentabilidad"])
@@ -18,7 +17,8 @@ router = APIRouter(prefix="/rentabilidad", tags=["rentabilidad"])
 def clientes(
     ejercicio: int = Query(...),
     min_comision: float = Query(default=MIN_COMISION_DEFAULT),
-    tasa_cesion_estimada: float = Query(default=TASA_CESION_ESTIMADA_DEFAULT),
+    # Sin informar: tasa real del ejercicio (ver services/tasa_cesion.py).
+    tasa_cesion_estimada: float | None = Query(default=None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):

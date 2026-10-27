@@ -23,9 +23,17 @@ const { Title, Text } = Typography
 // entorno (algunos builds de Node/Vite no incluyen datos ICU completos para es-ES).
 const _miles = (v: number) =>
   Math.round(Math.abs(v ?? 0)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
-const fmt  = (v: number) => (v < 0 ? '-' : '') + _miles(v) + ' €'
+// Importes con 2 decimales, igual que la Cuenta de Resultados del presupuesto,
+// para que las cifras de las dos pantallas se lean idénticas.
+const _milesDec = (v: number) => {
+  const [ent, dec] = Math.abs(v ?? 0).toFixed(2).split('.')
+  return ent.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + dec
+}
+// Espacio no separable antes de "€": con los decimales la cifra es más ancha y en
+// columnas estrechas no debe partirse en dos líneas.
+const fmt  = (v: number) => ((v ?? 0) <= -0.005 ? '-' : '') + _milesDec(v) + ' €'
 const fmtN = (v: number) => (v < 0 ? '-' : '') + _miles(v)
-const pct  = (v: number) => (v != null ? v.toFixed(1).replace('.', ',') + '%' : '—')
+const pct  = (v: number) => (v != null ? v.toFixed(2).replace('.', ',') + '%' : '—')
 
 const COLORS = ['#1890ff', '#52c41a', '#faad14', '#f5222d', '#722ed1', '#13c2c2', '#fa8c16', '#eb2f96']
 
@@ -47,8 +55,62 @@ const NAT_COLOR: Record<string, string> = {
   'Personal': '#1890ff', 'Alquiler': '#fa8c16', 'Tecnología': '#13c2c2',
   'Marketing': '#722ed1', 'Financiero': '#2f54eb', 'Bancos': '#4096ff',
   'Servicios profesionales': '#d4b106', 'Comunicaciones': '#52c41a',
-  'Viajes': '#389e0d', 'Impuestos': '#eb2f96', 'Suministros': '#cf1322',
+  'Viajes': '#389e0d', 'Impuestos': '#eb2f96', 'Seguros': '#c41d7f', 'Suministros': '#cf1322',
   'Cesión auxiliar': '#f5222d',
+}
+
+// ── Economía por póliza (vista normalizada) ──────────────────────────────────
+// Una póliza deja beneficio si su comisión neta (tras cesión) supera su coste de
+// gestión. Comisión mínima = coste por póliza / (1 − % cesión).
+const fmtPol = (v: number | null | undefined) => (v == null ? '—' : fmt(v))
+const colsPorPoliza = {
+  title: (
+    <Tooltip title="Economía por póliza (vista normalizada). Neta = comisión − cesión normalizada. Coste = costes operativos imputados. Mínima = coste / (1 − % cesión): la comisión por póliza por debajo de la cual cada póliza pierde dinero.">
+      <span style={{ color: '#d46b08', fontWeight: 600 }}>Por póliza (normalizado)</span>
+    </Tooltip>
+  ),
+  children: [
+    { title: 'Pólizas', dataIndex: 'n_polizas', align: 'right' as const, width: 72,
+      render: (v: number) => fmtN(v ?? 0), sorter: (a: any, b: any) => (a.n_polizas || 0) - (b.n_polizas || 0) },
+    { title: 'Comisión', dataIndex: 'comision_por_poliza', align: 'right' as const, width: 85,
+      render: (v: number | null, row: any) => {
+        const bajo = v != null && row.comision_minima_poliza != null && v < row.comision_minima_poliza
+        return <Text style={{ color: bajo ? '#f5222d' : undefined }}>{fmtPol(v)}</Text>
+      },
+      sorter: (a: any, b: any) => (a.comision_por_poliza || 0) - (b.comision_por_poliza || 0) },
+    { title: 'Neta', dataIndex: 'neta_por_poliza', align: 'right' as const, width: 80,
+      render: (v: number | null) => fmtPol(v), sorter: (a: any, b: any) => (a.neta_por_poliza || 0) - (b.neta_por_poliza || 0) },
+    { title: 'Coste', dataIndex: 'coste_por_poliza', align: 'right' as const, width: 80,
+      render: (v: number | null) => fmtPol(v), sorter: (a: any, b: any) => (a.coste_por_poliza || 0) - (b.coste_por_poliza || 0) },
+    { title: 'Resultado', dataIndex: 'resultado_por_poliza', align: 'right' as const, width: 85,
+      render: (v: number | null) => <Text style={{ color: v == null ? undefined : v >= 0 ? '#52c41a' : '#f5222d', fontWeight: 600 }}>{fmtPol(v)}</Text>,
+      sorter: (a: any, b: any) => (a.resultado_por_poliza || 0) - (b.resultado_por_poliza || 0) },
+    { title: <Tooltip title="Comisión por póliza necesaria para no perder dinero con su % de cesión: coste / (1 − % cesión). En rojo la comisión si no la alcanza."><span>Mínima</span></Tooltip>,
+      dataIndex: 'comision_minima_poliza', align: 'right' as const, width: 80,
+      render: (v: number | null) => <Text type="secondary">{fmtPol(v)}</Text>,
+      sorter: (a: any, b: any) => (a.comision_minima_poliza || 0) - (b.comision_minima_poliza || 0) },
+  ],
+}
+
+// Celdas de total del bloque "Por póliza" (desde el índice de columna start).
+function porPolizaSummary(rows: any[], start: number) {
+  const tPol   = rows.reduce((s, r) => s + (r.n_polizas || 0), 0)
+  const tBruta = rows.reduce((s, r) => s + (r.comision_bruta || 0), 0)
+  const tCesN  = rows.reduce((s, r) => s + (r.cesion_normalizada || 0), 0)
+  const tEbN   = rows.reduce((s, r) => s + (r.ebitda_normalizado || 0), 0)
+  const coste  = tBruta - tCesN - tEbN
+  const pctCes = tBruta > 0 ? tCesN / tBruta : 0
+  const porPol = (v: number) => (tPol > 0 ? fmt(v / tPol) : '—')
+  return (
+    <>
+      <Table.Summary.Cell index={start} align="right">{fmtN(tPol)}</Table.Summary.Cell>
+      <Table.Summary.Cell index={start + 1} align="right">{porPol(tBruta)}</Table.Summary.Cell>
+      <Table.Summary.Cell index={start + 2} align="right">{porPol(tBruta - tCesN)}</Table.Summary.Cell>
+      <Table.Summary.Cell index={start + 3} align="right">{porPol(coste)}</Table.Summary.Cell>
+      <Table.Summary.Cell index={start + 4} align="right"><Text style={{ color: tEbN >= 0 ? '#52c41a' : '#f5222d' }}>{porPol(tEbN)}</Text></Table.Summary.Cell>
+      <Table.Summary.Cell index={start + 5} align="right"><Text type="secondary">{tPol > 0 && pctCes < 1 ? fmt(coste / tPol / (1 - pctCes)) : '—'}</Text></Table.Summary.Cell>
+    </>
+  )
 }
 
 function KpiCard({
@@ -91,7 +153,7 @@ function BenchmarkCard({
         {sub && <Text type="secondary" style={{ fontSize: 10, display: 'block' }}>{sub}</Text>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <Text style={{ fontSize: 22, fontWeight: 700, color }}>{display ?? `${value.toFixed(1)}%`}</Text>
+        <Text style={{ fontSize: 22, fontWeight: 700, color }}>{display ?? `${value.toFixed(2).replace('.', ',')}%`}</Text>
         <Tag color={tagColor}>{tagLabel}</Tag>
       </div>
       <div style={{ fontSize: 11, lineHeight: 1.8 }}>
@@ -118,7 +180,7 @@ function HRankChart({ data, nameKey }: { data: any[], nameKey: string }) {
             const row = props?.payload || {}
             const isNorm = name === "ebitda_normalizado"
             const mrg = isNorm ? (row.margen_pct_norm ?? 0) : (row.margen_pct ?? 0)
-            return [fmt(Number(v)) + "  Mrg: " + mrg.toFixed(1) + "%", isNorm ? "EBITDA normalizado" : "EBITDA contable"]
+            return [fmt(Number(v)) + "  Mrg: " + pct(mrg), isNorm ? "EBITDA normalizado" : "EBITDA contable"]
           }}
         />
         <Legend formatter={(v: string) => v === "ebitda_normalizado" ? "EBITDA norm." : "EBITDA contable"} wrapperStyle={{ paddingTop: 4 }} />
@@ -162,9 +224,9 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
         <Col span={4}><KpiCard title="EBITDA contable" value={r.ebitda_contable ?? r.ebitda} color={(r.ebitda_contable ?? r.ebitda) >= 0 ? '#52c41a' : '#f5222d'}
           tooltip={`Bruta ${fmt(r.comision_bruta)} − Ces ${fmt(r.comision_auxiliar)} − COP ${fmt(r.costes_op_contable ?? r.costes_operativos)} − Capt ${fmt(r.costes_captacion)} − SinMap ${fmt(r.sin_mapear ?? 0)} = ${fmt(r.ebitda_contable ?? r.ebitda)}`} /></Col>
         <Col span={4}>
-          <Tooltip title={`EBITDA ${fmt(r.ebitda_contable ?? r.ebitda)} / Bruta ${fmt(r.comision_bruta)} = ${(r.margen_pct_contable ?? r.margen_pct).toFixed(1)}%`} placement="bottom">
+          <Tooltip title={`EBITDA ${fmt(r.ebitda_contable ?? r.ebitda)} / Bruta ${fmt(r.comision_bruta)} = ${(r.margen_pct_contable ?? r.margen_pct).toFixed(2).replace('.', ',')}%`} placement="bottom">
             <Card size="small" style={{ height: '100%' }}>
-              <Statistic title="Margen EBITDA" value={r.margen_pct_contable ?? r.margen_pct} suffix="%" precision={1}
+              <Statistic title="Margen EBITDA" value={r.margen_pct_contable ?? r.margen_pct} suffix="%" precision={2} decimalSeparator="," groupSeparator="."
                 valueStyle={{ color: (r.margen_pct_contable ?? r.margen_pct) >= 15 ? '#52c41a' : (r.margen_pct_contable ?? r.margen_pct) >= 5 ? '#faad14' : '#f5222d', fontSize: 20 }} />
             </Card>
           </Tooltip>
@@ -206,9 +268,9 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`EBITDA norm. ${fmt(r.ebitda_normalizado ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.margen_pct_norm ?? 0).toFixed(1)}%`} placement="bottom">
+          <Tooltip title={`EBITDA norm. ${fmt(r.ebitda_normalizado ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.margen_pct_norm ?? 0).toFixed(2).replace('.', ',')}%`} placement="bottom">
             <Card size="small" style={{ borderTop: '2px solid #9254de' }}>
-              <Statistic title="Margen EBITDA norm." value={r.margen_pct_norm ?? 0} suffix="%" precision={1}
+              <Statistic title="Margen EBITDA norm." value={r.margen_pct_norm ?? 0} suffix="%" precision={2} decimalSeparator="," groupSeparator="."
                 valueStyle={{ color: (r.margen_pct_norm ?? 0) >= 15 ? '#52c41a' : (r.margen_pct_norm ?? 0) >= 5 ? '#faad14' : '#f5222d', fontSize: 18 }} />
             </Card>
           </Tooltip>
@@ -317,7 +379,7 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
               <BarChart
                 data={(data.costes_naturaleza || []).slice(0, 10).map((e: any) => ({
                   ...e,
-                  pct_ing: r.comision_bruta > 0 ? +(e.importe / r.comision_bruta * 100).toFixed(1) : 0,
+                  pct_ing: r.comision_bruta > 0 ? +(e.importe / r.comision_bruta * 100).toFixed(2) : 0,
                 }))}
                 layout="vertical"
                 margin={{ left: 4, right: 54, top: 4, bottom: 4 }}
@@ -327,10 +389,10 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
                 <CartesianGrid strokeDasharray="2 4" horizontal={false} stroke="#e8e8e8" />
                 <ChartTooltip
                   formatter={(v: any, _: any, props: any) =>
-                    [`${Number(v).toFixed(1)}%  ·  ${fmt(props?.payload?.importe ?? 0)}`, '% s/ingresos']}
+                    [`${Number(v).toFixed(2).replace('.', ',')}%  ·  ${fmt(props?.payload?.importe ?? 0)}`, '% s/ingresos']}
                 />
                 <Bar dataKey="pct_ing" name="% s/ingresos" radius={[0, 3, 3, 0]}
-                  label={{ position: 'right', formatter: (v: number) => v > 0 ? `${v.toFixed(1)}%` : '', fontSize: 10, fill: '#595959' }}>
+                  label={{ position: 'right', formatter: (v: number) => v > 0 ? `${v.toFixed(2).replace('.', ',')}%` : '', fontSize: 10, fill: '#595959' }}>
                   {(data.costes_naturaleza || []).slice(0, 10).map((entry: any, i: number) => (
                     <Cell key={i} fill={NAT_COLOR[entry.naturaleza] || COLORS[i % COLORS.length]} />
                   ))}
@@ -343,11 +405,11 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
 
       <Row gutter={[12, 12]}>
         <Col span={6}>
-          <Tooltip title={`Ces.norm ${fmt(r.cesion_normalizada ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${r.comision_bruta > 0 ? (r.cesion_normalizada / r.comision_bruta * 100).toFixed(1) : 0}%`} placement="top">
+          <Tooltip title={`Ces.norm ${fmt(r.cesion_normalizada ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${pct(r.comision_bruta > 0 ? r.cesion_normalizada / r.comision_bruta * 100 : 0)}`} placement="top">
             <div><BenchmarkCard
               label="Ratio cesión normalizada"
               sub="Ces. normalizada / Com. bruta"
-              value={r.comision_bruta > 0 ? +(r.cesion_normalizada / r.comision_bruta * 100).toFixed(1) : 0}
+              value={r.comision_bruta > 0 ? +(r.cesion_normalizada / r.comision_bruta * 100).toFixed(2) : 0}
               colorFn={v => v <= 30 ? '#52c41a' : v <= 40 ? '#faad14' : '#f5222d'}
               rangos={['Óptimo < 30%', 'Bueno 30–40%', 'Alerta > 40%']}
               fuente="INESE 2025-2026"
@@ -355,7 +417,7 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`COP normalizado ${fmt(r.costes_operativos)} / Bruta ${fmt(r.comision_bruta)} = ${(r.ratio_costes_op_pct_norm ?? 0).toFixed(1)}%`} placement="top">
+          <Tooltip title={`COP normalizado ${fmt(r.costes_operativos)} / Bruta ${fmt(r.comision_bruta)} = ${(r.ratio_costes_op_pct_norm ?? 0).toFixed(2).replace('.', ',')}%`} placement="top">
             <div><BenchmarkCard
               label="Costes op. / Ingresos"
               sub="Costes op. normalizados / Comisión bruta"
@@ -367,7 +429,7 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`EBITDA norm. ${fmt(r.ebitda_normalizado ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.margen_pct_norm ?? 0).toFixed(1)}%`} placement="top">
+          <Tooltip title={`EBITDA norm. ${fmt(r.ebitda_normalizado ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.margen_pct_norm ?? 0).toFixed(2).replace('.', ',')}%`} placement="top">
             <div><BenchmarkCard
               label="Margen EBITDA Normalizado"
               sub="EBITDA Norm. / Comisión bruta"
@@ -379,12 +441,12 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`Ces.norm ${fmt(r.cesion_normalizada ?? 0)} + COP analít. ${fmt(r.costes_operativos)} = Total ${fmt(r.total_gastos_norm ?? 0)} / ${fmtN(r.n_recibos)} rec. = ${(r.coste_por_recibo ?? 0).toFixed(2)} €`} placement="top">
+          <Tooltip title={`Ces.norm ${fmt(r.cesion_normalizada ?? 0)} + COP analít. ${fmt(r.costes_operativos)} = Total ${fmt(r.total_gastos_norm ?? 0)} / ${fmtN(r.n_recibos)} rec. = ${fmt(r.coste_por_recibo ?? 0)}`} placement="top">
             <div><BenchmarkCard
               label="Coste total / Recibo"
               sub={`${fmtN(r.n_recibos)} recibos en el ejercicio`}
               value={r.coste_por_recibo}
-              display={`${(r.coste_por_recibo ?? 0).toFixed(2)} €`}
+              display={`${fmt(r.coste_por_recibo ?? 0)}`}
               colorFn={v => v <= 15 ? '#52c41a' : v <= 25 ? '#faad14' : '#f5222d'}
               rangos={['Óptimo < 15 €', 'Bueno 15–25 €', 'Alerta > 25 €']}
               fuente="Estimación sectorial"
@@ -399,11 +461,11 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
           <Card size="small" title="Canal de negocio — Directo vs. Intermediado (peso sobre ingresos)">
             <Row gutter={[0, 0]} align="middle">
               <Col span={7} style={{ textAlign: 'center' }}>
-                <Tooltip title={`Recibos SIN auxiliar: ${fmtN(r.rec_sin_auxiliar ?? 0)} · Ingresos ${fmt(r.ing_sin_auxiliar ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.pct_sin_auxiliar ?? 0).toFixed(1)}%`} placement="bottom">
+                <Tooltip title={`Recibos SIN auxiliar: ${fmtN(r.rec_sin_auxiliar ?? 0)} · Ingresos ${fmt(r.ing_sin_auxiliar ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.pct_sin_auxiliar ?? 0).toFixed(2).replace('.', ',')}%`} placement="bottom">
                   <div>
                     <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>Negocio directo (sin auxiliar)</Text>
                     <Text style={{ fontSize: 26, fontWeight: 700, color: '#1890ff' }}>
-                      {(r.pct_sin_auxiliar ?? 0).toFixed(1).replace('.', ',')}%
+                      {(r.pct_sin_auxiliar ?? 0).toFixed(2).replace('.', ',')}%
                     </Text>
                     <Text style={{ fontSize: 13, display: 'block' }}>{fmt(r.ing_sin_auxiliar ?? 0)}</Text>
                     <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
@@ -418,8 +480,8 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
                   <div style={{ width: `${r.pct_con_auxiliar ?? 0}%`, background: '#fa8c16', transition: 'width 0.3s' }} />
                 </div>
                 <Row justify="space-between">
-                  <Text style={{ fontSize: 10, color: '#1890ff' }}>■ Directo {(r.pct_sin_auxiliar ?? 0).toFixed(1)}%</Text>
-                  <Text style={{ fontSize: 10, color: '#fa8c16' }}>■ Auxiliar {(r.pct_con_auxiliar ?? 0).toFixed(1)}%</Text>
+                  <Text style={{ fontSize: 10, color: '#1890ff' }}>■ Directo {(r.pct_sin_auxiliar ?? 0).toFixed(2).replace('.', ',')}%</Text>
+                  <Text style={{ fontSize: 10, color: '#fa8c16' }}>■ Auxiliar {(r.pct_con_auxiliar ?? 0).toFixed(2).replace('.', ',')}%</Text>
                 </Row>
                 <div style={{ marginTop: 6, textAlign: 'center' }}>
                   <Text type="secondary" style={{ fontSize: 10 }}>
@@ -428,16 +490,21 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
                 </div>
               </Col>
               <Col span={7} style={{ textAlign: 'center' }}>
-                <Tooltip title={`Recibos CON auxiliar: ${fmtN(r.rec_con_auxiliar ?? 0)} · Ingresos ${fmt(r.ing_con_auxiliar ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.pct_con_auxiliar ?? 0).toFixed(1)}%`} placement="bottom">
+                <Tooltip title={`Recibos CON auxiliar: ${fmtN(r.rec_con_auxiliar ?? 0)} · Ingresos ${fmt(r.ing_con_auxiliar ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.pct_con_auxiliar ?? 0).toFixed(2).replace('.', ',')}%`} placement="bottom">
                   <div>
                     <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>Intermediado (con auxiliar)</Text>
                     <Text style={{ fontSize: 26, fontWeight: 700, color: '#fa8c16' }}>
-                      {(r.pct_con_auxiliar ?? 0).toFixed(1).replace('.', ',')}%
+                      {(r.pct_con_auxiliar ?? 0).toFixed(2).replace('.', ',')}%
                     </Text>
                     <Text style={{ fontSize: 13, display: 'block' }}>{fmt(r.ing_con_auxiliar ?? 0)}</Text>
                     <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
                       {fmtN(r.rec_con_auxiliar ?? 0)} recibos
                     </Text>
+                    <Tooltip title={`Cesión normalizada ${fmt(r.cesion_normalizada ?? 0)} / Ingresos intermediados ${fmt(r.ing_con_auxiliar ?? 0)}. Ratio de cesión = % intermediado × esta tasa. Tasa real contabilizada ${r.tasa_cesion_real?.ejercicio ?? ''}: ${pct(r.tasa_cesion_real?.tasa_pct ?? 0)} · aplicada a la estimada: ${pct(r.tasa_cesion_aplicada_pct ?? 0)}`}>
+                      <Text strong style={{ fontSize: 12, display: 'block', marginTop: 4, color: '#d46b08' }}>
+                        Cesión s/ intermediado: {pct(r.cesion_s_intermediado_pct ?? 0)}
+                      </Text>
+                    </Tooltip>
                   </div>
                 </Tooltip>
               </Col>
@@ -445,7 +512,7 @@ function D1Ejecutivo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion:
           </Card>
         </Col>
         <Col span={6}>
-          <Tooltip title={`Ing. sin auxiliar ${fmt(r.ing_sin_auxiliar ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.pct_sin_auxiliar ?? 0).toFixed(1)}% · ${fmtN(r.rec_sin_auxiliar ?? 0)} recibos directos de ${fmtN(r.n_recibos_canal ?? 0)} totales`} placement="top">
+          <Tooltip title={`Ing. sin auxiliar ${fmt(r.ing_sin_auxiliar ?? 0)} / Bruta ${fmt(r.comision_bruta)} = ${(r.pct_sin_auxiliar ?? 0).toFixed(2).replace('.', ',')}% · ${fmtN(r.rec_sin_auxiliar ?? 0)} recibos directos de ${fmtN(r.n_recibos_canal ?? 0)} totales`} placement="top">
             <div><BenchmarkCard
               label="% Negocio directo"
               sub="Ingresos sin auxiliar / Total ingresos"
@@ -510,7 +577,7 @@ function D2Compania({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: 
         { title: 'Ingresos', dataIndex: 'comision_bruta', align: 'right' as const, width: 100,
           render: (v: number) => fmt(v), sorter: (a: any, b: any) => a.comision_bruta - b.comision_bruta },
         { title: 'Peso%', key: 'peso', align: 'right' as const, width: 68,
-          render: (_: any, row: any) => <Text type="secondary">{totalBruta > 0 ? (row.comision_bruta / totalBruta * 100).toFixed(1) + '%' : '—'}</Text> },
+          render: (_: any, row: any) => <Text type="secondary">{totalBruta > 0 ? (row.comision_bruta / totalBruta * 100).toFixed(2).replace('.', ',') + '%' : '—'}</Text> },
         { title: 'Cesión', dataIndex: 'comision_auxiliar', align: 'right' as const, width: 95,
           render: (v: number) => fmt(v), sorter: (a: any, b: any) => a.comision_auxiliar - b.comision_auxiliar },
         { title: 'Com.Neta', dataIndex: 'comision_neta', align: 'right' as const, width: 95,
@@ -539,6 +606,7 @@ function D2Compania({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: 
           sorter: (a: any, b: any) => (a.margen_pct_norm ?? 0) - (b.margen_pct_norm ?? 0) },
       ],
     },
+    colsPorPoliza,
   ]
 
   return (
@@ -587,6 +655,7 @@ function D2Compania({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: 
                   {tBruta > 0 ? pct(tEbN / tBruta * 100) : '—'}
                 </Tag>
               </Table.Summary.Cell>
+              {porPolizaSummary(rows, 12)}
             </Table.Summary.Row>
           )
         }}
@@ -619,7 +688,7 @@ function D3Auxiliar({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: 
         { title: 'Ingresos', dataIndex: 'comision_bruta', align: 'right' as const, width: 95,
           render: (v: number) => fmt(v), sorter: (a: any, b: any) => a.comision_bruta - b.comision_bruta },
         { title: 'Peso%', key: 'pesoD3', align: 'right' as const, width: 60,
-          render: (_: any, row: any) => <Text type="secondary">{totalBrutaD3 > 0 ? (row.comision_bruta / totalBrutaD3 * 100).toFixed(1) + '%' : '—'}</Text> },
+          render: (_: any, row: any) => <Text type="secondary">{totalBrutaD3 > 0 ? (row.comision_bruta / totalBrutaD3 * 100).toFixed(2).replace('.', ',') + '%' : '—'}</Text> },
         { title: 'Cesión', dataIndex: 'comision_auxiliar', align: 'right' as const, width: 90,
           render: (v: number) => fmt(v), sorter: (a: any, b: any) => a.comision_auxiliar - b.comision_auxiliar },
         { title: 'Com.Neta', dataIndex: 'comision_neta', align: 'right' as const, width: 90,
@@ -633,7 +702,7 @@ function D3Auxiliar({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: 
           render: (v: number) => <Tag color={v >= 15 ? 'success' : v >= 5 ? 'warning' : 'error'}>{pct(v)}</Tag>,
           sorter: (a: any, b: any) => (a.margen_pct_contable||0) - (b.margen_pct_contable||0) },
         { title: 'Ing./Rec.', dataIndex: 'comision_media_recibo', align: 'right' as const, width: 78,
-          render: (v: number) => <Text type="secondary">{v ? v.toFixed(0) + ' €' : '—'}</Text>,
+          render: (v: number) => <Text type="secondary">{v ? fmt(v) : '—'}</Text>,
           sorter: (a: any, b: any) => (a.comision_media_recibo || 0) - (b.comision_media_recibo || 0) },
       ],
     },
@@ -651,6 +720,7 @@ function D3Auxiliar({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: 
           sorter: (a: any, b: any) => (a.margen_pct_norm ?? 0) - (b.margen_pct_norm ?? 0) },
       ],
     },
+    colsPorPoliza,
   ]
 
   const auxSorted = [...(data.auxiliares as any[])].sort((a, b) => (b.margen_pct_norm ?? b.margen_pct ?? 0) - (a.margen_pct_norm ?? a.margen_pct ?? 0))
@@ -699,6 +769,7 @@ function D3Auxiliar({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: 
               <Table.Summary.Cell index={12} align="center">
                 <Tag color={tBruta > 0 ? (tEbN/tBruta*100 >= 15 ? 'success' : tEbN/tBruta*100 >= 5 ? 'warning' : 'error') : 'default'} style={{ fontWeight: 700 }}>{tBruta > 0 ? pct(tEbN/tBruta*100) : '—'}</Tag>
               </Table.Summary.Cell>
+              {porPolizaSummary(rows, 13)}
             </Table.Summary.Row>
           )
         }}
@@ -733,7 +804,7 @@ function D4Ramo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: numb
         { title: 'Ingresos', dataIndex: 'comision_bruta', align: 'right' as const, width: 95,
           render: (v: number) => fmt(v), sorter: (a: any, b: any) => a.comision_bruta - b.comision_bruta },
         { title: 'Peso%', key: 'pesoD4', align: 'right' as const, width: 60,
-          render: (_: any, row: any) => <Text type="secondary">{totalBrutaD4 > 0 ? (row.comision_bruta / totalBrutaD4 * 100).toFixed(1) + '%' : '—'}</Text> },
+          render: (_: any, row: any) => <Text type="secondary">{totalBrutaD4 > 0 ? (row.comision_bruta / totalBrutaD4 * 100).toFixed(2).replace('.', ',') + '%' : '—'}</Text> },
         { title: 'Cesión', dataIndex: 'comision_auxiliar', align: 'right' as const, width: 90,
           render: (v: number) => fmt(v), sorter: (a: any, b: any) => a.comision_auxiliar - b.comision_auxiliar },
         { title: 'Com.Neta', dataIndex: 'comision_neta', align: 'right' as const, width: 90,
@@ -762,6 +833,7 @@ function D4Ramo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: numb
           sorter: (a: any, b: any) => (a.margen_pct_norm ?? 0) - (b.margen_pct_norm ?? 0) },
       ],
     },
+    colsPorPoliza,
   ]
 
   return (
@@ -806,6 +878,7 @@ function D4Ramo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: numb
               <Table.Summary.Cell index={11} align="center">
                 <Tag color={tBruta > 0 ? (tEbN/tBruta*100 >= 15 ? 'success' : tEbN/tBruta*100 >= 5 ? 'warning' : 'error') : 'default'} style={{ fontWeight: 700 }}>{tBruta > 0 ? pct(tEbN/tBruta*100) : '—'}</Tag>
               </Table.Summary.Cell>
+              {porPolizaSummary(rows, 12)}
             </Table.Summary.Row>
           )
         }}
@@ -840,7 +913,7 @@ function CdrSegmento({ pl, titulo, color }: { pl: any; titulo: string; color: st
     { k: '4',  label: 'Costes operativos', cont: copCont,                             norm: copAnal,                        tipo: 'coste',    ttCont: `COP analítico ${fmt(copAnal)} + Ajuste ${fmt(copCont - copAnal)} = ${fmt(copCont)}`, ttNorm: `COP analítico (pool ya reducido por ajuste): ${fmt(copAnal)}` },
     { k: '4t', label: 'Total gastos',      cont: (pl.comision_auxiliar ?? 0) + copCont, norm: cesNorm + copAnal,            tipo: 'subtotal', ttCont: `Ces. ${fmt(pl.comision_auxiliar ?? 0)} + COP ${fmt(copCont)} = ${fmt((pl.comision_auxiliar ?? 0) + copCont)}`, ttNorm: `Ces.norm ${fmt(cesNorm)} + COP ${fmt(copAnal)} = ${fmt(cesNorm + copAnal)}` },
     { k: '5',  label: 'EBITDA',            cont: ebitdaCont,                          norm: ebitdaNorm,                     tipo: 'ebitda',   ttCont: `Bruta − Ces − COP.cont − Capt ${fmt(pl.costes_captacion ?? 0)} − SinMap ${fmt(pl.sin_mapear ?? 0)} = ${fmt(ebitdaCont)}`, ttNorm: `Bruta − Ces.norm − COP.anal − Capt − SinMap = ${fmt(ebitdaNorm)}` },
-    { k: '6',  label: '% Margen EBITDA',   cont: pl.margen_pct_contable ?? pl.margen_pct ?? 0, norm: pl.margen_pct_norm ?? 0, tipo: 'pct', ttCont: `EBITDA cont. ${fmt(ebitdaCont)} / Bruta ${fmt(bruta)} = ${(pl.margen_pct_contable ?? pl.margen_pct ?? 0).toFixed(1)}%`, ttNorm: `EBITDA norm. ${fmt(ebitdaNorm)} / Bruta ${fmt(bruta)} = ${(pl.margen_pct_norm ?? 0).toFixed(1)}%` },
+    { k: '6',  label: '% Margen EBITDA',   cont: pl.margen_pct_contable ?? pl.margen_pct ?? 0, norm: pl.margen_pct_norm ?? 0, tipo: 'pct', ttCont: `EBITDA cont. ${fmt(ebitdaCont)} / Bruta ${fmt(bruta)} = ${(pl.margen_pct_contable ?? pl.margen_pct ?? 0).toFixed(2).replace('.', ',')}%`, ttNorm: `EBITDA norm. ${fmt(ebitdaNorm)} / Bruta ${fmt(bruta)} = ${(pl.margen_pct_norm ?? 0).toFixed(2).replace('.', ',')}%` },
   ]
 
   return (
@@ -918,8 +991,8 @@ function D5NuevaProduccion({ ejercicio, tasaCesion }: { ejercicio: number; tasaC
   const cartEbitdaNorm = cart.ebitda_normalizado  ?? cart.ebitda ?? 0
   const npMrgNorm      = np.margen_pct_norm       ?? 0
   const cartMrgNorm    = cart.margen_pct_norm     ?? 0
-  const npCesNormPct   = np.comision_bruta   > 0 ? +((np.cesion_normalizada   ?? 0) / np.comision_bruta   * 100).toFixed(1) : 0
-  const cartCesNormPct = cart.comision_bruta > 0 ? +((cart.cesion_normalizada ?? 0) / cart.comision_bruta * 100).toFixed(1) : 0
+  const npCesNormPct   = np.comision_bruta   > 0 ? +((np.cesion_normalizada   ?? 0) / np.comision_bruta   * 100).toFixed(2) : 0
+  const cartCesNormPct = cart.comision_bruta > 0 ? +((cart.cesion_normalizada ?? 0) / cart.comision_bruta * 100).toFixed(2) : 0
 
   const costeCaptacion = data.coste_captacion || 0
   const paybackMeses   = npEbitdaNorm > 0 && costeCaptacion > 0
@@ -937,7 +1010,7 @@ function D5NuevaProduccion({ ejercicio, tasaCesion }: { ejercicio: number; tasaC
       {/* Benchmarks (todos sobre valores normalizados) */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col span={6}>
-          <Tooltip title={`Ces.norm ${fmt(np.cesion_normalizada ?? 0)} / Bruta ${fmt(np.comision_bruta ?? 0)} = ${npCesNormPct.toFixed(1)}%`} placement="top">
+          <Tooltip title={`Ces.norm ${fmt(np.cesion_normalizada ?? 0)} / Bruta ${fmt(np.comision_bruta ?? 0)} = ${npCesNormPct.toFixed(2).replace('.', ',')}%`} placement="top">
             <div><BenchmarkCard label="Ratio cesión NP (norm.)" sub="Ces. normalizada NP / Ingresos NP"
               value={npCesNormPct}
               colorFn={v => v <= 40 ? '#52c41a' : v <= 50 ? '#faad14' : '#f5222d'}
@@ -946,7 +1019,7 @@ function D5NuevaProduccion({ ejercicio, tasaCesion }: { ejercicio: number; tasaC
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`EBITDA norm NP ${fmt(npEbitdaNorm)} / Bruta ${fmt(np.comision_bruta ?? 0)} = ${npMrgNorm.toFixed(1)}%`} placement="top">
+          <Tooltip title={`EBITDA norm NP ${fmt(npEbitdaNorm)} / Bruta ${fmt(np.comision_bruta ?? 0)} = ${npMrgNorm.toFixed(2).replace('.', ',')}%`} placement="top">
             <div><BenchmarkCard label="Margen EBITDA NP (norm.)" sub="EBITDA norm. NP / Ingresos NP"
               value={npMrgNorm}
               colorFn={v => v >= 15 ? '#52c41a' : v >= 5 ? '#faad14' : '#f5222d'}
@@ -955,7 +1028,7 @@ function D5NuevaProduccion({ ejercicio, tasaCesion }: { ejercicio: number; tasaC
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`Ces.norm ${fmt(cart.cesion_normalizada ?? 0)} / Bruta ${fmt(cart.comision_bruta ?? 0)} = ${cartCesNormPct.toFixed(1)}%`} placement="top">
+          <Tooltip title={`Ces.norm ${fmt(cart.cesion_normalizada ?? 0)} / Bruta ${fmt(cart.comision_bruta ?? 0)} = ${cartCesNormPct.toFixed(2).replace('.', ',')}%`} placement="top">
             <div><BenchmarkCard label="Ratio cesión Cartera (norm.)" sub="Ces. normalizada Cartera / Ingresos Cartera"
               value={cartCesNormPct}
               colorFn={v => v <= 30 ? '#52c41a' : v <= 40 ? '#faad14' : '#f5222d'}
@@ -964,7 +1037,7 @@ function D5NuevaProduccion({ ejercicio, tasaCesion }: { ejercicio: number; tasaC
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`EBITDA norm Cartera ${fmt(cartEbitdaNorm)} / Bruta ${fmt(cart.comision_bruta ?? 0)} = ${cartMrgNorm.toFixed(1)}%`} placement="top">
+          <Tooltip title={`EBITDA norm Cartera ${fmt(cartEbitdaNorm)} / Bruta ${fmt(cart.comision_bruta ?? 0)} = ${cartMrgNorm.toFixed(2).replace('.', ',')}%`} placement="top">
             <div><BenchmarkCard label="Margen EBITDA Cartera (norm.)" sub="EBITDA norm. Cartera / Ingresos Cartera"
               value={cartMrgNorm}
               colorFn={v => v >= 20 ? '#52c41a' : v >= 10 ? '#faad14' : '#f5222d'}
@@ -1043,7 +1116,7 @@ function DSubramo({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: nu
         { title: 'Ingresos', dataIndex: 'comision_bruta', align: 'right' as const, width: 90,
           render: (v: number) => fmt(v), sorter: (a: any, b: any) => a.comision_bruta - b.comision_bruta },
         { title: 'Peso%', key: 'pesoSR', align: 'right' as const, width: 60,
-          render: (_: any, row: any) => <Text type="secondary">{totalBrutaSR > 0 ? (row.comision_bruta / totalBrutaSR * 100).toFixed(1) + '%' : '—'}</Text> },
+          render: (_: any, row: any) => <Text type="secondary">{totalBrutaSR > 0 ? (row.comision_bruta / totalBrutaSR * 100).toFixed(2).replace('.', ',') + '%' : '—'}</Text> },
         { title: 'Cesión', dataIndex: 'comision_auxiliar', align: 'right' as const, width: 88,
           render: (v: number) => fmt(v), sorter: (a: any, b: any) => a.comision_auxiliar - b.comision_auxiliar },
         { title: 'Com.Neta', dataIndex: 'comision_neta', align: 'right' as const, width: 88,
@@ -1207,18 +1280,18 @@ function D7Costes({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: nu
         const v = row.pct_ingreso_norm ?? row.pct_ingreso ?? 0
         const t = COST_TARGETS[row.naturaleza]
         const color = !t ? '#333' : v <= t.target ? '#52c41a' : v <= t.target * 1.2 ? '#faad14' : '#f5222d'
-        return <Text style={{ color, fontWeight: 600 }}>{v.toFixed(1).replace('.', ',')}%</Text>
+        return <Text style={{ color, fontWeight: 600 }}>{v.toFixed(2).replace('.', ',')}%</Text>
       } },
     { title: '% s/costes (norm.)', key: 'pct_norm', align: 'right' as const, width: 130,
-      render: (_: any, row: any) => `${(row.pct_norm ?? row.pct ?? 0).toFixed(1).replace('.', ',')}%` },
+      render: (_: any, row: any) => `${(row.pct_norm ?? row.pct ?? 0).toFixed(2).replace('.', ',')}%` },
     { title: 'Gap vs mercado (pp)', key: 'gap', align: 'center' as const, width: 140,
       render: (_: any, row: any) => {
         const t = COST_TARGETS[row.naturaleza]
         const v = row.pct_ingreso_norm ?? row.pct_ingreso
         if (!t || v == null) return null
-        const gap = parseFloat((v - t.target).toFixed(1))
-        if (gap <= 0) return <Tag color="success">-{Math.abs(gap).toFixed(1).replace('.', ',')} pp</Tag>
-        return <Tag color={gap > 5 ? 'error' : 'warning'}>+{gap.toFixed(1).replace('.', ',')} pp</Tag>
+        const gap = parseFloat((v - t.target).toFixed(2))
+        if (gap <= 0) return <Tag color="success">-{Math.abs(gap).toFixed(2).replace('.', ',')} pp</Tag>
+        return <Tag color={gap > 5 ? 'error' : 'warning'}>+{gap.toFixed(2).replace('.', ',')} pp</Tag>
       } },
     { title: 'Referencia', key: 'fuente', width: 130,
       render: (_: any, row: any) => {
@@ -1238,12 +1311,12 @@ function D7Costes({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: nu
           />
         </Col>
         <Col span={6}>
-          <Tooltip title={`Total gastos norm. ${fmt(r.total_costes_norm ?? 0)} / Ingresos ${fmt(r.comision_bruta ?? 0)} = ${(r.ratio_total_pct_norm ?? 0).toFixed(1)}%`} placement="bottom">
+          <Tooltip title={`Total gastos norm. ${fmt(r.total_costes_norm ?? 0)} / Ingresos ${fmt(r.comision_bruta ?? 0)} = ${(r.ratio_total_pct_norm ?? 0).toFixed(2).replace('.', ',')}%`} placement="bottom">
             <Card size="small" style={{ height: '100%' }}>
               <Statistic
                 title="% Gastos / Ingresos (norm.)"
                 value={r.ratio_total_pct_norm ?? 0}
-                precision={1}
+                precision={2} decimalSeparator="," groupSeparator="."
                 suffix="%"
                 valueStyle={{ color: (r.ratio_total_pct_norm ?? 0) <= 80 ? '#52c41a' : '#f5222d', fontSize: 20 }}
               />
@@ -1251,12 +1324,12 @@ function D7Costes({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: nu
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`Total gastos norm. ${fmt(r.total_costes_norm ?? 0)} / ${(r.n_recibos ?? 0).toLocaleString()} recibos = ${(r.coste_por_recibo_norm ?? 0).toFixed(2)} €/recibo`} placement="bottom">
+          <Tooltip title={`Total gastos norm. ${fmt(r.total_costes_norm ?? 0)} / ${(r.n_recibos ?? 0).toLocaleString()} recibos = ${fmt(r.coste_por_recibo_norm ?? 0)}/recibo`} placement="bottom">
             <Card size="small" style={{ height: '100%' }}>
               <Statistic
                 title="Coste / Recibo (norm.)"
                 value={r.coste_por_recibo_norm ?? 0}
-                precision={2}
+                precision={2} decimalSeparator="," groupSeparator="."
                 suffix="€"
                 valueStyle={{ fontSize: 20 }}
               />
@@ -1264,12 +1337,12 @@ function D7Costes({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: nu
           </Tooltip>
         </Col>
         <Col span={6}>
-          <Tooltip title={`COP analítico ${fmt(r.costes_operativos ?? 0)} / Ingresos ${fmt(r.comision_bruta ?? 0)} = ${(r.ratio_costes_pct_norm ?? 0).toFixed(1)}%`} placement="bottom">
+          <Tooltip title={`COP analítico ${fmt(r.costes_operativos ?? 0)} / Ingresos ${fmt(r.comision_bruta ?? 0)} = ${(r.ratio_costes_pct_norm ?? 0).toFixed(2).replace('.', ',')}%`} placement="bottom">
             <Card size="small" style={{ height: '100%' }}>
               <Statistic
                 title="% COP / Ingresos (norm.)"
                 value={r.ratio_costes_pct_norm ?? 0}
-                precision={1}
+                precision={2} decimalSeparator="," groupSeparator="."
                 suffix="%"
                 valueStyle={{ color: (r.ratio_costes_pct_norm ?? 0) <= 30 ? '#52c41a' : (r.ratio_costes_pct_norm ?? 0) <= 50 ? '#faad14' : '#f5222d', fontSize: 20 }}
               />
@@ -1286,7 +1359,7 @@ function D7Costes({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: nu
             <YAxis tickFormatter={tickFmtAuto} tick={{ fontSize: 10 }} width={52} />
             <ChartTooltip formatter={(v: any, _: string, props: any) => {
               const row = props?.payload || {}
-              return [`${fmt(Number(v))}  (${(row.pct_ingreso ?? 0).toFixed(1)}% / ingresos)`, 'Importe norm.']
+              return [`${fmt(Number(v))}  (${(row.pct_ingreso ?? 0).toFixed(2).replace('.', ',')}% / ingresos)`, 'Importe norm.']
             }} />
             <Bar dataKey="importe" name="importe" radius={[3, 3, 0, 0]}>
               {bridgeData.map((d: any, i: number) => (
@@ -1310,7 +1383,7 @@ function D7Costes({ ejercicio, tasaCesion }: { ejercicio: number; tasaCesion: nu
         }}
       />
       <div style={{ marginTop: 8, fontSize: 10, color: '#bfbfbf' }}>
-        Valores normalizados: cesión al {tasaCesion}% estimada + cesión real 623*. Gap positivo = por encima del target sectorial.
+        Valores normalizados: cesión al {pct(tasaCesion)} estimada + cesión real 623*. Gap positivo = por encima del target sectorial.
       </div>
     </div>
   )
@@ -1323,13 +1396,23 @@ export default function DashboardsAnalitico() {
   const [ejercicio, setEjercicio] = useState<number | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const [taskStatus, setTaskStatus] = useState<any>(null)
-  const [tasaCesion, setTasaCesion] = useState<number>(40)
+  // Tasa de cesión estimada: por defecto la REAL del ejercicio; el selector permite
+  // simular otra (tasaManual) y se vuelve a la real al cambiar de ejercicio.
+  const [tasaManual, setTasaManual] = useState<number | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const { data: ejercicios = [] } = useQuery({
     queryKey: ['analitico-ejercicios'],
     queryFn: () => analiticoApi.getEjercicios().then(r => r.data),
   })
+
+  const { data: tasaReal } = useQuery({
+    queryKey: ['analitico-tasa-real', ejercicio],
+    queryFn: () => analiticoApi.getTasaCesionReal(ejercicio!).then(r => r.data),
+    enabled: !!ejercicio,
+  })
+  useEffect(() => { setTasaManual(null) }, [ejercicio])
+  const tasaCesion: number | null = tasaManual ?? (tasaReal?.tasa_pct ?? null)
 
   useEffect(() => {
     if (ejercicios.length > 0 && !ejercicio) setEjercicio(ejercicios[0])
@@ -1392,17 +1475,26 @@ export default function DashboardsAnalitico() {
               disabled={calculando}
             />
             <Divider type="vertical" />
-            <Text style={{ fontSize: 12 }}>Cesión est.:</Text>
+            <Tooltip title={tasaReal
+              ? `Tasa real ${ejercicio}: ${pct(tasaReal.tasa_pct)} (cesión ${fmt(tasaReal.cesion_recibos)} / comisión ${fmt(tasaReal.ingreso_recibos)} de ${fmtN(tasaReal.n_recibos)} recibos con auxiliar y cesión 623). Cada auxiliar se estima con SU tasa real; si no tiene cesión contabilizada, con su % del catálogo de Administración → Auxiliares. Esta tasa solo se aplica a los que no están en ninguno de los dos.`
+              : 'Tasa de cesión estimada'}>
+              <Text style={{ fontSize: 12 }}>Cesión est.:</Text>
+            </Tooltip>
             <InputNumber
-              min={0} max={100}
-              value={tasaCesion}
-              onChange={v => setTasaCesion(v ?? 40)}
-              formatter={v => `${v}%`}
-              parser={v => Number(String(v).replace('%', ''))}
-              style={{ width: 68 }}
+              min={0} max={100} step={0.01} precision={2}
+              value={tasaCesion ?? undefined}
+              onChange={v => setTasaManual(v ?? null)}
+              formatter={v => `${String(v).replace('.', ',')}%`}
+              parser={v => Number(String(v).replace('%', '').replace(',', '.'))}
+              style={{ width: 84 }}
               size="small"
               disabled={calculando}
             />
+            {tasaManual != null && tasaReal && (
+              <Button size="small" type="link" onClick={() => setTasaManual(null)} style={{ padding: 0 }}>
+                Usar real ({pct(tasaReal.tasa_pct)})
+              </Button>
+            )}
             <Button
               icon={<SyncOutlined />}
               onClick={() => {
@@ -1453,6 +1545,8 @@ export default function DashboardsAnalitico() {
 
       {!ejercicio ? (
         <Alert type="warning" message="Selecciona un ejercicio y pulsa 'Recalcular modelo' para generar los datos analíticos." />
+      ) : tasaCesion == null ? (
+        <Spin style={{ display: 'block', margin: '40px auto' }} />
       ) : (
         <Tabs
           type="card"

@@ -9,6 +9,8 @@ from ..models.presupuesto import (
     PresupuestoCesionAuxiliar, TipoReglaGasto,
 )
 from ..models.diario import DiarioApunte, EstadoApunte
+from ..models.analitico import AnaliticoAjusteCoste
+from .tasa_cesion import resolver_tasa, TASA_AUX_CTE, TASA_EXPR
 
 FAMILIA_AMORTIZACIONES = 'Amortizaciones y ajustes'
 FAMILIA_FINANCIERO = 'Gastos financieros'
@@ -111,14 +113,16 @@ def _cesion_normalizada_base(db: Session, ejercicio: int, tasa: float = 0.40) ->
               AND r.tomador IS NOT NULL AND r.tomador != ''
             GROUP BY r.tomador
             HAVING COALESCE(SUM(CAST(f.importe AS FLOAT)), 0) >= 0
-        )
+        ),
+    """ + TASA_AUX_CTE + f"""
         SELECT
             rec.tomador,
-            COALESCE(SUM(CAST(f.importe AS FLOAT)), 0) * :tasa AS cesion_est
+            COALESCE(SUM(CAST(f.importe AS FLOAT) * {TASA_EXPR}), 0) AS cesion_est
         FROM fact_resultado_analitico f
         JOIN recibos rec ON f.recibo_id = rec.id
         JOIN recibos_sin_cesion rsc ON f.recibo_id = rsc.recibo_id
         JOIN tomadores_con_ingreso_positivo tip ON rec.tomador = tip.tomador
+        LEFT JOIN tasa_aux ta ON ta.ente = rec.ente
         WHERE f.ejercicio = :ej
           AND f.tipo_cuenta = 'ingreso'
           AND rec.tomador IS NOT NULL
@@ -130,9 +134,113 @@ def _cesion_normalizada_base(db: Session, ejercicio: int, tasa: float = 0.40) ->
     return ces_norm, 0.0
 
 
-def calcular_cuenta_resultados(db: Session, presupuesto: Presupuesto, tasa_cesion_estimada: float = 0.40) -> dict:
+def pl_contable_ejercicio(db: Session, ejercicio: int) -> dict:
+    """
+    P&L contable real de un ejercicio, leído del diario. Única fuente de la columna
+    "real/contable": la usan esta Cuenta de Resultados (año base) y el Dashboard
+    ejecutivo del Modelo Analítico, para que ambas den exactamente lo mismo.
+    """
+    # Ingresos por compañía: cuentas 7*
+    ing: dict[str, float] = {}
+    for a in db.query(DiarioApunte).filter(
+        DiarioApunte.ejercicio == ejercicio,
+        DiarioApunte.numero_cuenta.like('7%'),
+        DiarioApunte.estado != EstadoApunte.EXCLUIDO,
+    ).all():
+        comp = a.compania or 'Sin compañía'
+        ing[comp] = ing.get(comp, 0.0) + float((a.haber or 0) - (a.debe or 0))
+    ing = {k: round(v, 2) for k, v in ing.items() if abs(v) > 0.01}
+
+    # Gastos cuentas 6* (clasificación dual: cuenta + familia)
+    gto: dict[str, float] = {}
+    amort = 0.0
+    financiero = 0.0
+    for a in db.query(DiarioApunte).filter(
+        DiarioApunte.ejercicio == ejercicio,
+        DiarioApunte.numero_cuenta.like('6%'),
+        DiarioApunte.estado != EstadoApunte.EXCLUIDO,
+    ).all():
+        cuenta = (a.numero_cuenta or '').strip()
+        fam    = (a.familia_gasto or 'Sin clasificar').strip()
+        net    = float((a.debe or 0) - (a.haber or 0))
+
+        # Impuesto: solo por cuenta (630), la familia puede ser variable
+        if cuenta.startswith('630'):
+            continue  # excluido del P&L: se calcula al 25%
+
+        if _es_amort(cuenta, fam):
+            amort += net
+        elif _es_financiero(cuenta, fam):
+            financiero += net
+        else:
+            if 'auxiliar' in fam.lower():
+                fam = FAMILIA_CESIONES
+            gto[fam] = gto.get(fam, 0.0) + net
+    gto = {k: round(v, 2) for k, v in gto.items() if abs(v) > 0.01}
+
+    # Desglose de cesiones por auxiliar: cuentas 623*, nombre en descripcion_cuenta
+    ces_aux: dict[str, float] = {}
+    for a in db.query(DiarioApunte).filter(
+        DiarioApunte.ejercicio == ejercicio,
+        DiarioApunte.numero_cuenta.like('623%'),
+        DiarioApunte.estado != EstadoApunte.EXCLUIDO,
+    ).all():
+        aux = (a.descripcion_cuenta or a.auxiliar or 'Sin auxiliar').strip()
+        ces_aux[aux] = ces_aux.get(aux, 0.0) + float((a.debe or 0) - (a.haber or 0))
+
+    total_ing = sum(ing.values())
+    total_gto_op = round(sum(gto.values()), 2)
+    return {
+        'ingresos_por_compania': ing,
+        'total_ingresos':        total_ing,
+        'gastos_por_familia':    gto,
+        'total_gastos_operativos': total_gto_op,
+        'total_cesiones':        gto.get(FAMILIA_CESIONES, 0.0),
+        'cesiones_por_auxiliar': ces_aux,
+        'amortizaciones':        amort,
+        'gastos_financieros':    financiero,
+        'ebitda':                round(total_ing - total_gto_op, 2),
+    }
+
+
+def ajuste_coste_analitico(db: Session, ejercicio: int) -> tuple[float, dict[str, float]]:
+    """
+    Ajustes de coste del Modelo Analítico (AnaliticoAjusteCoste): coste de personal
+    adscrito a un auxiliar que, en la vista NORMALIZADA, se sustituye por la cesión
+    estimada de ese auxiliar (si no se quitara, se contaría dos veces). Devuelve el
+    total anual y su reparto por familia de gasto, proporcional al gasto real de las
+    cuentas de cada ajuste (igual que el analítico reduce su pool).
+    """
+    ajustes = db.query(AnaliticoAjusteCoste).filter(
+        AnaliticoAjusteCoste.ejercicio == ejercicio,
+        AnaliticoAjusteCoste.activo == True,
+    ).all()
+    total = 0.0
+    por_familia: dict[str, float] = {}
+    for aj in ajustes:
+        importe = float(aj.importe_mensual) * 12
+        total += importe
+        base_fam: dict[str, float] = {}
+        for fam, net in db.query(DiarioApunte.familia_gasto, DiarioApunte.debe - DiarioApunte.haber).filter(
+            DiarioApunte.ejercicio == ejercicio,
+            DiarioApunte.numero_cuenta.like(f"{aj.numero_cuenta}%"),
+            DiarioApunte.estado != EstadoApunte.EXCLUIDO,
+        ).all():
+            fam = (fam or 'Sin clasificar').strip()
+            base_fam[fam] = base_fam.get(fam, 0.0) + float(net or 0)
+        pool = sum(v for v in base_fam.values() if v > 0)
+        for fam, v in base_fam.items():
+            if v > 0 and pool > 0:
+                por_familia[fam] = por_familia.get(fam, 0.0) + importe * v / pool
+    return round(total, 2), {k: round(v, 2) for k, v in por_familia.items()}
+
+
+def calcular_cuenta_resultados(db: Session, presupuesto: Presupuesto, tasa_cesion_estimada: float | None = None) -> dict:
     ejercicio_ppto = presupuesto.ejercicio
     ejercicio_base = presupuesto.ejercicio_base
+    # Sin informar: tasa real del año base, la misma que usa el Modelo Analítico.
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio_base, tasa_cesion_estimada)
+    base_pl = pl_contable_ejercicio(db, ejercicio_base)
 
     # ─── 2026 Ingresos por compañía ──────────────────────────────────────────
     ing_ppto: dict[str, float] = {}
@@ -143,18 +251,9 @@ def calcular_cuenta_resultados(db: Session, presupuesto: Presupuesto, tasa_cesio
         ing_ppto[comp] = ing_ppto.get(comp, 0.0) + float(l.total_anual or 0)
     total_ing_ppto = sum(ing_ppto.values())
 
-    # ─── 2025 Ingresos por compañía cuentas 7* ──────────────────────────────
-    ing_base: dict[str, float] = {}
-    for a in db.query(DiarioApunte).filter(
-        DiarioApunte.ejercicio == ejercicio_base,
-        DiarioApunte.numero_cuenta.like('7%'),
-        DiarioApunte.estado != EstadoApunte.EXCLUIDO,
-    ).all():
-        comp = a.compania or 'Sin compañía'
-        ing_base[comp] = ing_base.get(comp, 0.0) + float((a.haber or 0) - (a.debe or 0))
-
-    ing_base = {k: round(v, 2) for k, v in ing_base.items() if abs(v) > 0.01}
-    total_ing_base = sum(ing_base.values())
+    # ─── Año base: ingresos por compañía cuentas 7* ──────────────────────────
+    ing_base = base_pl['ingresos_por_compania']
+    total_ing_base = base_pl['total_ingresos']
 
     todas_companias = sorted(set(list(ing_ppto.keys()) + list(ing_base.keys())))
     ingresos_por_compania = [
@@ -204,45 +303,12 @@ def calcular_cuenta_resultados(db: Session, presupuesto: Presupuesto, tasa_cesio
     financiero_ppto = round(financiero_ppto, 2)
     total_gto_op_ppto = round(sum(gto_ppto.values()), 2)
 
-    # ─── 2025 Gastos cuentas 6* (clasificación dual: cuenta + familia) ───────
-    gto_base: dict[str, float] = {}
-    amort_base = 0.0
-    financiero_base = 0.0
-
-    for a in db.query(DiarioApunte).filter(
-        DiarioApunte.ejercicio == ejercicio_base,
-        DiarioApunte.numero_cuenta.like('6%'),
-        DiarioApunte.estado != EstadoApunte.EXCLUIDO,
-    ).all():
-        cuenta = (a.numero_cuenta or '').strip()
-        fam    = (a.familia_gasto or 'Sin clasificar').strip()
-        net    = float((a.debe or 0) - (a.haber or 0))
-
-        # Impuesto: solo por cuenta (630), la familia puede ser variable
-        if cuenta.startswith('630'):
-            continue  # excluido del P&L: se calcula al 25%
-
-        if _es_amort(cuenta, fam):
-            amort_base += net
-        elif _es_financiero(cuenta, fam):
-            financiero_base += net
-        else:
-            if 'auxiliar' in fam.lower():
-                fam = FAMILIA_CESIONES
-            gto_base[fam] = gto_base.get(fam, 0.0) + net
-
-    gto_base = {k: round(v, 2) for k, v in gto_base.items() if abs(v) > 0.01}
-    total_gto_op_base = round(sum(gto_base.values()), 2)
-
-    # Desglose de cesiones por auxiliar (año base): cuentas 623*, nombre en descripcion_cuenta
-    cesiones_aux_base: dict[str, float] = {}
-    for a in db.query(DiarioApunte).filter(
-        DiarioApunte.ejercicio == ejercicio_base,
-        DiarioApunte.numero_cuenta.like('623%'),
-        DiarioApunte.estado != EstadoApunte.EXCLUIDO,
-    ).all():
-        aux = (a.descripcion_cuenta or a.auxiliar or 'Sin auxiliar').strip()
-        cesiones_aux_base[aux] = cesiones_aux_base.get(aux, 0.0) + float((a.debe or 0) - (a.haber or 0))
+    # ─── Año base: gastos cuentas 6* (clasificación dual: cuenta + familia) ──
+    gto_base = base_pl['gastos_por_familia']
+    amort_base = base_pl['amortizaciones']
+    financiero_base = base_pl['gastos_financieros']
+    total_gto_op_base = base_pl['total_gastos_operativos']
+    cesiones_aux_base = base_pl['cesiones_por_auxiliar']
 
     total_cesiones_ppto = gto_ppto.get(FAMILIA_CESIONES, 0.0)
     total_cesiones_base = gto_base.get(FAMILIA_CESIONES, 0.0)
@@ -273,7 +339,16 @@ def calcular_cuenta_resultados(db: Session, presupuesto: Presupuesto, tasa_cesio
     ces_norm_base, ces_ant_base = _cesion_normalizada_base(db, ejercicio_base, tasa_cesion_estimada)
     # Diferencia respecto a la cesión contable del año base
     delta_ces_norm = total_cesiones_base - ces_norm_base   # positivo si contable > normalizada
-    ebitda_norm_base = round(total_ing_base - total_gto_op_base + delta_ces_norm, 2)
+    # Ajustes de coste del analítico: en la vista normalizada ese coste de personal ya
+    # está dentro de la cesión estimada del auxiliar, así que sale de gastos operativos.
+    # Misma fórmula que analitico.dashboard_ejecutivo: los dos EBITDA normalizados cuadran.
+    aj_total_base, aj_familia_base = ajuste_coste_analitico(db, ejercicio_base)
+    ebitda_norm_base = round(total_ing_base - total_gto_op_base + aj_total_base + delta_ces_norm, 2)
+    gastos_familia_norm = {
+        f: round(v - aj_familia_base.get(f, 0.0), 2) for f, v in gto_base.items()
+    }
+    gastos_familia_norm[FAMILIA_CESIONES] = round(ces_norm_base, 2)
+    total_gto_op_norm = round(total_gto_op_base - aj_total_base - delta_ces_norm, 2)
 
     # ─── KPIs ────────────────────────────────────────────────────────────────
     ebitda_ppto = total_ing_ppto  - total_gto_op_ppto
@@ -327,6 +402,9 @@ def calcular_cuenta_resultados(db: Session, presupuesto: Presupuesto, tasa_cesio
             'cesion_normalizada':     round(ces_norm_base, 2),
             'cesion_años_anteriores': round(ces_ant_base, 2),
             'cesion_contable_base':   round(total_cesiones_base, 2),
+            'ajuste_coste':           aj_total_base,
+            'gastos_por_familia':     gastos_familia_norm,
+            'total_gastos_operativos': total_gto_op_norm,
             'ebitda_normalizado':     ebitda_norm_base,
             'margen_ebitda_norm_pct': round(ebitda_norm_base / total_ing_base * 100, 2) if total_ing_base else 0.0,
         },

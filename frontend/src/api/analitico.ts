@@ -21,6 +21,9 @@ export const analiticoApi = {
   getNaturalezas: () => apiClient.get('/analitico/naturalezas'),
   getDrivers: () => apiClient.get('/analitico/drivers'),
   getEjercicios: () => apiClient.get('/analitico/ejercicios'),
+  // Tasa real de cesión del ejercicio (cesión 623 / comisión de recibos con auxiliar y cesión)
+  getTasaCesionReal: (ejercicio: number) =>
+    apiClient.get('/analitico/tasa-cesion-real', { params: { ejercicio } }),
 
   // Recálculo asíncrono
   recalcular: (ejercicio: number) =>

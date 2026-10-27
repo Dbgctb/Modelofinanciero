@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { rentabilidadApi } from '../../api/rentabilidad'
+import { analiticoApi } from '../../api/analitico'
 
 const { Title, Text } = Typography
 
@@ -125,7 +126,7 @@ function ClaseTag({ clase, small }: { clase: string; small?: boolean }) {
 }
 
 // ── Export CSV ────────────────────────────────────────────────────────────────
-function exportarCSV(filas: any[], ejercicio: number, tasaCesion: number) {
+function exportarCSV(filas: any[], ejercicio: number) {
   const ef = (c: any) => ({
     clase:  c.tiene_cesion_estimada ? c.clase_estimada  : c.clase,
     margen: c.tiene_cesion_estimada ? c.margen_neto_estimado : c.margen_neto,
@@ -138,7 +139,7 @@ function exportarCSV(filas: any[], ejercicio: number, tasaCesion: number) {
     'Nº recibos', 'Nº ramos',
     'Comisión bruta €', 'Cesión €', 'Cesión estimada (flag)', 'Costes €',
     'Margen neto €', 'Margen %',
-    `Cesión estimada ${tasaCesion}% €`, 'Margen estimado €', '% Margen estimado',
+    'Cesión estimada €', 'Margen estimado €', '% Margen estimado',
   ]
 
   const filas_csv = filas.map(c => {
@@ -756,7 +757,9 @@ export default function RentabilidadCliente() {
   const [filtroClase, setFiltroClase] = useState<string>('Todos')
   const [busqueda, setBusqueda] = useState('')
   const [vista, setVista] = useState<'todos' | 'top20' | 'bottom20'>('todos')
-  const [tasaCesion, setTasaCesion] = useState<number>(40)
+  // Tasa de cesión estimada: por defecto la REAL del ejercicio (misma que el Modelo
+  // Analítico); el selector permite simular otra y se vuelve a la real al cambiar de año.
+  const [tasaManual, setTasaManual] = useState<number | null>(null)
 
   const { data: ejercicios = [] } = useQuery({
     queryKey: ['rent-ejercicios'],
@@ -771,10 +774,19 @@ export default function RentabilidadCliente() {
     }
   }, [ejercicios])
 
+  const { data: tasaReal } = useQuery({
+    queryKey: ['analitico-tasa-real', ejercicio],
+    queryFn: () => analiticoApi.getTasaCesionReal(ejercicio).then(r => r.data),
+    enabled: !!ejercicio,
+  })
+  useEffect(() => { setTasaManual(null) }, [ejercicio])
+  const tasaCesion: number = tasaManual ?? tasaReal?.tasa_pct ?? 0
+  const tasaTxt = tasaCesion.toFixed(2).replace('.', ',') + '%'
+
   const { data, isLoading, isError } = useQuery({
     queryKey: ['rent-clientes', ejercicio, tasaCesion],
     queryFn: () => rentabilidadApi.getClientes(ejercicio, undefined, tasaCesion / 100).then(r => r.data),
-    enabled: !!ejercicio,
+    enabled: !!ejercicio && (tasaManual != null || tasaReal != null),
     staleTime: 5 * 60_000,
   })
 
@@ -838,7 +850,7 @@ export default function RentabilidadCliente() {
         const ef = efectivo(row)
         return (
           <Tooltip title={row.tiene_cesion_estimada
-            ? `Real: ${row.clase} · Con cesión est. ${tasaCesion}%: ${ef.clase}`
+            ? `Real: ${row.clase} · Con cesión estimada: ${ef.clase}`
             : CLASE_DESC[ef.clase] ?? ''}>
             <span><ClaseTag clase={ef.clase} /></span>
           </Tooltip>
@@ -867,7 +879,7 @@ export default function RentabilidadCliente() {
             <Space size={4}>
               <Text strong style={{ fontSize: 13 }}>{v}</Text>
               {row.tiene_cesion_estimada && (
-                <Tooltip title={`Auxiliar sin cesión registrada. Estimación al ${tasaCesion}%.`}>
+                <Tooltip title={`Auxiliar sin cesión registrada. Estimación con la tasa real de su auxiliar (o su % del catálogo de Auxiliares si no tiene cesiones registradas; ${tasaTxt} si tampoco está en el catálogo).`}>
                   <Tag color="orange" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
                     cesión est.
                   </Tag>
@@ -909,7 +921,7 @@ export default function RentabilidadCliente() {
       render: (_: any, row: any) => {
         const ef = efectivo(row)
         return row.tiene_cesion_estimada ? (
-          <Tooltip title={`Real (623): ${fmt(row.cesion_directa)} + Estimada ${tasaCesion}%: ${fmt(row.cesion_estimada)}`}>
+          <Tooltip title={`Real (623): ${fmt(row.cesion_directa)} + Estimada (tasa real del auxiliar): ${fmt(row.cesion_estimada)}`}>
             <Text style={{ color: '#722ed1', fontSize: 12 }}>{fmt(ef.cesion)}</Text>
           </Tooltip>
         ) : (
@@ -937,7 +949,7 @@ export default function RentabilidadCliente() {
         const m  = ef.margen ?? 0
         return (
           <Tooltip title={row.tiene_cesion_estimada
-            ? `Estimado (cesión ${tasaCesion}%): ${fmt(m)}\nReal (sin cesión): ${fmt(row.margen_neto)}`
+            ? `Estimado (cesión a tasa real del auxiliar): ${fmt(m)}\nReal (sin cesión): ${fmt(row.margen_neto)}`
             : undefined}>
             <Text strong style={{ color: m >= 0 ? '#52c41a' : '#f5222d', fontSize: 12 }}>
               {m >= 0 ? <RiseOutlined /> : <FallOutlined />} {fmt(m)}
@@ -980,20 +992,27 @@ export default function RentabilidadCliente() {
         <Col>
           <Space size={16} align="center">
             <Space size={6} align="center">
-              <Tooltip title="Tasa de cesión estimada para clientes con auxiliar sin cesión registrada">
+              <Tooltip title={tasaReal
+                ? `Cada auxiliar se estima con SU tasa real; si no tiene cesión registrada, con su % del catálogo de Administración → Auxiliares. Esta tasa solo se aplica a los que no están en ninguno de los dos. Por defecto, la real global de ${ejercicio}: ${tasaReal.tasa_pct.toFixed(2).replace('.', ',')}% (cesión 623 / comisión de los recibos con auxiliar que sí tienen cesión).`
+                : 'Tasa de cesión estimada para clientes con auxiliar sin cesión registrada'}>
                 <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                   Cesión est. <QuestionCircleOutlined />
                 </Text>
               </Tooltip>
               <InputNumber
                 value={tasaCesion}
-                onChange={v => setTasaCesion(v ?? 40)}
-                min={0} max={100} step={5}
-                formatter={v => `${v}%`}
-                parser={v => Number((v || '').replace('%', ''))}
-                style={{ width: 80 }}
+                onChange={v => setTasaManual(v ?? null)}
+                min={0} max={100} step={0.01} precision={2}
+                formatter={v => `${String(v).replace('.', ',')}%`}
+                parser={v => Number(String(v || '').replace('%', '').replace(',', '.'))}
+                style={{ width: 88 }}
                 size="small"
               />
+              {tasaManual != null && tasaReal && (
+                <Button size="small" type="link" onClick={() => setTasaManual(null)} style={{ padding: 0 }}>
+                  Usar real ({tasaReal.tasa_pct.toFixed(2).replace('.', ',')}%)
+                </Button>
+              )}
             </Space>
             <Select
               value={ejercicio}
@@ -1052,7 +1071,7 @@ export default function RentabilidadCliente() {
               { key:'1', concepto: 'Ingresos totales del ejercicio',             importe: totalIng,  pct: '100.0%',         color: undefined,  bold: false },
               { key:'2', concepto: 'Ingresos de recibos con auxiliar',           importe: ingConAux, pct: pctT(ingConAux),  color: undefined,  bold: false },
               { key:'3', concepto: 'Cesión real registrada (cta. 623)',          importe: cesReal,   pct: pctT(cesReal),    color: '#1677ff',  bold: false },
-              { key:'4', concepto: `Cesión estimada ${tasaCesion}% (aux. sin 623)`, importe: cesEst, pct: ingEstBase > 0 ? `${tasaCesion}%` : '—', color: '#fa8c16', bold: false },
+              { key:'4', concepto: `Cesión estimada (tasa real por auxiliar, aux. sin 623)`, importe: cesEst, pct: ingEstBase > 0 ? `${(cesEst / ingEstBase * 100).toFixed(2).replace('.', ',')}%` : '—', color: '#fa8c16', bold: false },
               { key:'5', concepto: 'Cesión normalizada (real + estimada)',       importe: cesNorm,   pct: pctT(cesNorm),    color: '#722ed1',  bold: true  },
             ]
             const cols = [
@@ -1094,7 +1113,7 @@ export default function RentabilidadCliente() {
             <Card size="small" style={{ borderColor: '#fa8c16', borderWidth: 1.5 }}
               styles={{ body: { padding: '12px 16px' } }}>
               <Text style={{ fontSize: 12, color: '#fa8c16', fontWeight: 600, display: 'block', marginBottom: 10 }}>
-                CON CESIÓN ESTIMADA ({tasaCesion}%) · {resumen.n_con_cesion_estimada} cliente{resumen.n_con_cesion_estimada !== 1 ? 's' : ''} con auxiliar sin cesión registrada
+                CON CESIÓN ESTIMADA (tasa real por auxiliar) · {resumen.n_con_cesion_estimada} cliente{resumen.n_con_cesion_estimada !== 1 ? 's' : ''} con auxiliar sin cesión registrada
               </Text>
               <Row gutter={[8, 4]} align="middle" wrap>
                 <Col>
@@ -1107,9 +1126,9 @@ export default function RentabilidadCliente() {
                 </Col>
                 <Col><Text style={{ color: '#bfbfbf', fontSize: 18, margin: '0 6px', lineHeight: '40px' }}>+</Text></Col>
                 <Col>
-                  <Tooltip title={`Ingresos de recibos con auxiliar sin cesión registrada × ${tasaCesion}%`}>
+                  <Tooltip title={`Ingresos de recibos con auxiliar sin cesión registrada × tasa real de su auxiliar (o su % del catálogo de Auxiliares si no tiene cesiones registradas; ${tasaTxt} si tampoco está en el catálogo)`}>
                     <div>
-                      <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>Estimada devengada ({tasaCesion}%)</Text>
+                      <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>Estimada devengada (tasa real por auxiliar)</Text>
                       <Text strong style={{ fontSize: 14, color: '#fa8c16' }}>{fmt(resumen.cesion_estimada_total ?? 0)}</Text>
                     </div>
                   </Tooltip>
@@ -1169,7 +1188,7 @@ export default function RentabilidadCliente() {
                 <Button
                   icon={<DownloadOutlined />}
                   size="small"
-                  onClick={() => exportarCSV(filas, ejercicio, tasaCesion)}
+                  onClick={() => exportarCSV(filas, ejercicio)}
                   disabled={filas.length === 0}
                 >
                   Excel
@@ -1183,7 +1202,7 @@ export default function RentabilidadCliente() {
           <div style={{ padding: '6px 12px', background: '#fffbe6', borderBottom: '1px solid #ffe58f', fontSize: 12 }}>
             <Text type="secondary">
               <span style={{ color: '#fa8c16', fontWeight: 600 }}>cesión est.</span>
-              {' '}= auxiliar sin cesión registrada. El valor mostrado ya incluye la estimación al {tasaCesion}%.
+              {' '}= auxiliar sin cesión registrada. El valor mostrado ya incluye la estimación con la tasa real de su auxiliar.
               Pasa el ratón sobre el margen para ver el valor real (sin cesión).
               {' · '}▶ Expande la fila para ver los recibos del cliente.
             </Text>

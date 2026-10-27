@@ -6,7 +6,7 @@
  *
  * Caso típico: sueldo + SS de un empleado adscrito a un colaborador específico
  * que ya se le descuenta de su liquidación mensual. El modelo analítico mueve
- * ese importe del pool de Personal (distribuido por RECIBOS a todos) a una
+ * ese importe del pool de Personal (distribuido por PÓLIZAS a todos) a una
  * partida directa del auxiliar.
  */
 import { useState } from 'react'
