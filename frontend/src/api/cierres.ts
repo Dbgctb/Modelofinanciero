@@ -252,3 +252,87 @@ export const bancoApi = {
   excelConciliados: (bancoId: number, ejercicio: number) =>
     apiClient.get(`${B}/${bancoId}/conciliados/excel`, { params: { ejercicio }, responseType: 'blob' }),
 }
+
+// ── Herramientas: recobros, asientos de diferencias, exportar ────────────────
+
+export interface FilaRecobro {
+  grupo: string
+  asiento_key: string
+  concepto: string
+  cuenta: string
+  neto_recobros: number
+  recibo: string | null
+  neto_4152: number | null
+  cobros: number[]
+  neto_cobro: number | null
+  estado: string
+}
+
+export interface DiagnosticoH {
+  filas: FilaRecobro[]
+  resumen: { grupos: number; filas: number; faltantes: number; sin_recibos: number }
+}
+
+export interface CandidatoCobro {
+  id: number
+  neto: number
+  concepto_norm: string
+  recibo_norm: string | null
+  fecha: string
+  ejercicio: number
+}
+
+export interface EmparejamientoH {
+  id: number
+  asiento_key: string
+  concepto_norm: string
+  cuenta_440: string
+  neto_recobros: number
+  recibo: string
+  cobro_id: number
+  created_at: string
+  neto_cobro: number | null
+  cobro_conciliado: boolean | null
+  cobro_inexistente: boolean
+}
+
+export interface LineaAsiento {
+  linea: number
+  serie: string
+  cuenta: string
+  debe: number
+  haber: number
+  concepto: string | null
+  fecha: string
+  descripcion_cuenta: string | null
+}
+
+export interface DuplicadoAsiento {
+  origen_ejercicio: number
+  origen_numero: number
+  ejercicio: number
+  numero: number
+  invertido: boolean
+}
+
+type FiltroH = { ejercicio: number; concepto: string; cuenta?: string }
+
+export const herramientasApi = {
+  diagnostico: (f: FiltroH) => apiClient.post<DiagnosticoH>('/cierres/recobros/diagnostico', f),
+  conciliarRecobros: (f: FiltroH & { seleccion: { grupo: string; recibo: string | null }[]; modo: 'grupo' | 'filas'; tolerancia: number }) =>
+    apiClient.post<{ conciliados: number; grupos_ok: string[]; grupos_error: string[] }>('/cierres/recobros/conciliar', f),
+  candidatos: (cuenta: string, recibo?: string) =>
+    apiClient.get<CandidatoCobro[]>('/cierres/recobros/candidatos', { params: { cuenta, recibo } }),
+  guardarEmparejamiento: (b: { grupo: string; recibo: string | null; neto_recobros: number; cobro_ids: number[] }) =>
+    apiClient.post('/cierres/recobros/emparejamientos', b),
+  emparejamientos: () => apiClient.get<EmparejamientoH[]>('/cierres/recobros/emparejamientos'),
+  borrarEmparejamientos: (ids: number[]) => apiClient.post('/cierres/recobros/emparejamientos/borrar', { ids }),
+  conciliarGruposH: (ejercicios: number[], tolerancia: number) =>
+    apiClient.post<{ task_id: string }>('/cierres/recobros/conciliar-grupos', { ejercicios, tolerancia }),
+  excelRecobros: (f: FiltroH) => apiClient.post('/cierres/recobros/excel', f, { responseType: 'blob' }),
+  asiento: (ejercicio: number, numero: number) =>
+    apiClient.get<LineaAsiento[]>('/cierres/diferencias/asiento', { params: { ejercicio, numero } }),
+  excelDiferencias: (duplicados: DuplicadoAsiento[]) =>
+    apiClient.post('/cierres/diferencias/excel', { duplicados }, { responseType: 'blob' }),
+  exportar: (ejercicio?: number) => apiClient.post<{ task_id: string }>('/cierres/exportar', null, { params: { ejercicio } }),
+}

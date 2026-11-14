@@ -251,6 +251,25 @@ Verificado por la API: reimportación (236 conservados, 180 sustituidos), concil
 1:1, N:N, rechazo de repetidos, desconciliar grupo, propuesta, Excel y alta/baja de bancos. Al terminar, cc_*
 restaurado con `migrar_cuadre_sqlite.py --reemplazar` (verificado idéntico).
 
+### Fase 5: herramientas (2026-11-14)
+- **Recobros (Diagnóstico H)** (`services/cierres/recobros.py`): diagnóstico por grupo y recibo 4152* (OK / FALTANTE /
+  sin recibos), emparejamientos guardados aplicados solos al buscar, asignar cobro (recibo vacío) o cobro extra
+  (mismo recibo), conciliar grupo completo o filas (MANUAL_H), "Conciliar grupos" (variante de la regla H con los
+  emparejamientos; RULE_H) y Excel. Corrección: "conciliar filas" toma todos los apuntes de cada fila (el original
+  solo el primero cuando la fila juntaba varios). El diálogo "Cargar emparejamientos" queda como lista para revisar
+  y borrar (aplicarlos ya lo hace la búsqueda).
+- **Asientos de diferencias** (`diferencias.py`): cargar, duplicar igual o invertido, lista en pantalla (no se guarda,
+  como en el original) y Excel con las 43 columnas de la plantilla de importación del ERP.
+- **Exportar** (`exportar.py`): apuntes sin puntear agrupados por cuenta con esquema plegable, como el original, más
+  la hoja "Incidencias" (el original tenía el código pero el botón no la generaba). 2025: 2,3 s; todos: 17 s.
+- Verificado por la API con datos reales y restaurado cc_* al terminar. Datos actuales: de los 6 emparejamientos
+  guardados, 4 apuntan a cobros que ya no existen y 2 a cobros ya conciliados (se ven así en la pantalla).
+
+### Fase 6: cierre
+- `CLAUDE.md` y `README.md` del proyecto documentan el módulo.
+- Pendiente del usuario: validar todas las pantallas en la app. Después, archivar (no borrar) la carpeta
+  `CC con repositorio/` y decidir el merge de la rama a `main`.
+
 ### Prueba de paridad (fase 2 y fase 4)
 El estado guardado en el SQLite se generó con versiones anteriores de las reglas. Por eso se compara
 **código antiguo contra código nuevo sobre los mismos datos**, no contra el estado guardado:
@@ -304,5 +323,5 @@ Para repetir la migración: `scripts/migrar_cuadre_sqlite.py RUTA_SQLITE --reemp
 | 2 Motor de punteo | Hecho (sumas exactas, decisión del usuario) | 2026-11-14 | (este commit) |
 | 3 Pantallas de punteo | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
 | 4 Conciliación bancaria | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
-| 5 Herramientas | Pendiente | | |
-| 6 Cierre | Pendiente | | |
+| 5 Herramientas | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
+| 6 Cierre | Documentación hecha; falta tu validación en la app y archivar la carpeta original | 2026-11-14 | (este commit) |

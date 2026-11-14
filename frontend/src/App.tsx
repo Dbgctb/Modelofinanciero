@@ -33,7 +33,9 @@ import Oportunidades from './pages/crossSelling/Oportunidades'
 import FugaAlertas from './pages/crossSelling/FugaAlertas'
 import Efectividad from './pages/crossSelling/Efectividad'
 import CrossSellingConfiguracion from './pages/crossSelling/Configuracion'
-import CierresEnPreparacion from './pages/cierres/EnPreparacion'
+import CierresRecobros from './pages/cierres/Recobros'
+import CierresDiferencias from './pages/cierres/AsientosDiferencias'
+import CierresExportar from './pages/cierres/Exportar'
 import CierresImportar from './pages/cierres/ImportarDiario'
 import CierresPunteo from './pages/cierres/PunteoAutomatico'
 import CierresManual from './pages/cierres/PunteoManual'
@@ -133,15 +135,15 @@ export default function App() {
                 <Route path="cross-selling/efectividad" element={<Efectividad />} />
                 <Route path="cross-selling/configuracion" element={<CrossSellingConfiguracion />} />
 
-                {/* Cierres contabilidad (en preparación, ver docs/PLAN_CIERRES_CONTABILIDAD.md) */}
+                {/* Cierres contabilidad (ver docs/PLAN_CIERRES_CONTABILIDAD.md) */}
                 <Route path="cierres/importar" element={<CierresImportar />} />
                 <Route path="cierres/punteo" element={<CierresPunteo />} />
                 <Route path="cierres/manual" element={<CierresManual />} />
-                <Route path="cierres/recobros" element={<CierresEnPreparacion key="recobros" titulo="Recobros (Diagnóstico H)" descripcion="Recobros de comisiones sin cobro asociado: emparejamientos guardados, asignar cobro y Excel." fase="fase 5" />} />
+                <Route path="cierres/recobros" element={<CierresRecobros />} />
                 <Route path="cierres/conciliados" element={<CierresConciliados />} />
-                <Route path="cierres/diferencias" element={<CierresEnPreparacion key="diferencias" titulo="Asientos de diferencias" descripcion="Carga, duplica o invierte asientos y genera la «Nueva carga de asientos»." fase="fase 5" />} />
+                <Route path="cierres/diferencias" element={<CierresDiferencias />} />
                 <Route path="cierres/banco" element={<CierresBanco />} />
-                <Route path="cierres/exportar" element={<CierresEnPreparacion key="exportar" titulo="Exportar" descripcion="Excel completo del punteo." fase="fase 5" />} />
+                <Route path="cierres/exportar" element={<CierresExportar />} />
 
                 {/* Módulo Analítico */}
                 <Route path="analitico/dashboards" element={<DashboardsAnalitico />} />
