@@ -13,6 +13,7 @@ from ..models.presupuesto import (
 )
 from ..models.diario import DiarioApunte, TipoCuenta, EstadoApunte
 from ..models.auxiliares import AuxiliarComisionRef
+from ..core.errores import ErrorApp
 
 MESES = list(range(1, 13))
 
@@ -429,7 +430,7 @@ def importar_cesiones_excel(db: Session, presupuesto: Presupuesto, contenido: by
     retencion_col = _find('reten')
 
     if not auxiliar_col:
-        raise ValueError("Columna 'Auxiliar' requerida no encontrada")
+        raise ErrorApp("PRE-016")
 
     def _f(val) -> float:
         try:

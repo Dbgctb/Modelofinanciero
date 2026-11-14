@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 from typing import List
+from .errores import ErrorApp
 
 
 class Settings(BaseSettings):
@@ -23,14 +24,14 @@ class Settings(BaseSettings):
     @classmethod
     def secret_key_must_be_strong(cls, v: str) -> str:
         if len(v) < 32:
-            raise ValueError("SECRET_KEY debe tener al menos 32 caracteres")
+            raise ErrorApp("CFG-001")
         return v
 
     @field_validator("ALLOWED_ORIGINS")
     @classmethod
     def no_wildcard_origins(cls, v: List[str]) -> List[str]:
         if "*" in v:
-            raise ValueError("ALLOWED_ORIGINS no puede contener '*' — especifica dominios concretos")
+            raise ErrorApp("CFG-002")
         return v
 
     class Config:

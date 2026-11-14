@@ -3,7 +3,7 @@ Router Modelo Analítico de Rentabilidad.
 Expone MAP_CUENTAS CRUD, MAP_DRIVERS, recálculo y 7 dashboards.
 """
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from ..core.limiter import limiter
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -25,6 +25,7 @@ from ..services.analitico import (
     actualizar_ajuste_coste, eliminar_ajuste_coste,
     calcular_valoracion,
 )
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/analitico", tags=["analitico"])
 
@@ -60,7 +61,7 @@ def save_map_cuenta(
     current_user: User = Depends(require_gestor_or_admin),
 ):
     if body.naturaleza not in NATURALEZAS:
-        raise HTTPException(400, f"Naturaleza inválida. Valores posibles: {NATURALEZAS}")
+        raise error_http("ANA-001", valores=", ".join(NATURALEZAS))
     upsert_map_cuenta(db, body.numero_cuenta.strip(), body.naturaleza, body.descripcion)
     return {"ok": True}
 
@@ -82,7 +83,7 @@ def remove_map_cuenta(
 ):
     ok = delete_map_cuenta(db, numero_cuenta)
     if not ok:
-        raise HTTPException(404, "Cuenta no encontrada")
+        raise error_http("ANA-002")
     return {"ok": True}
 
 
@@ -108,9 +109,9 @@ def save_map_driver(
     current_user: User = Depends(require_gestor_or_admin),
 ):
     if body.naturaleza not in NATURALEZAS:
-        raise HTTPException(400, f"Naturaleza inválida")
+        raise error_http("ANA-001", valores=", ".join(NATURALEZAS))
     if body.driver not in DRIVERS:
-        raise HTTPException(400, f"Driver inválido. Valores posibles: {DRIVERS}")
+        raise error_http("ANA-003", valores=", ".join(DRIVERS))
     return upsert_map_driver(db, body.naturaleza, body.driver)
 
 
@@ -155,7 +156,7 @@ def recalcular_estado(
 ):
     status = get_task_status(task_id)
     if status is None:
-        raise HTTPException(404, "Tarea no encontrada o expirada")
+        raise error_http("ANA-004")
     return status
 
 
@@ -318,7 +319,7 @@ def patch_ajuste_coste(
     kwargs = {k: v for k, v in body.dict().items() if v is not None}
     aj = actualizar_ajuste_coste(db, ajuste_id, **kwargs)
     if not aj:
-        raise HTTPException(404, "Ajuste no encontrado")
+        raise error_http("ANA-005")
     return {"ok": True}
 
 
@@ -330,7 +331,7 @@ def delete_ajuste_coste_endpoint(
 ):
     ok = eliminar_ajuste_coste(db, ajuste_id)
     if not ok:
-        raise HTTPException(404, "Ajuste no encontrado")
+        raise error_http("ANA-005")
     return {"ok": True}
 
 

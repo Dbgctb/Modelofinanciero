@@ -1,7 +1,7 @@
 import logging
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Body
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, Body
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -13,6 +13,7 @@ from ..models.mercado import TasaMercadoRef, TipoTasaMercado
 from ..models.auxiliares import AuxiliarComisionRef
 from ..data.tasas_mercado_icea import TASAS_ICEA
 from ..services.auxiliares import calcular_pct_retencion
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/admin", tags=["Administración"])
 log = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ def actualizar_tasa(
 ):
     tasa = db.query(TasaMercadoRef).filter(TasaMercadoRef.id == tasa_id).first()
     if not tasa:
-        raise HTTPException(status_code=404, detail="Tasa no encontrada")
+        raise error_http("ADM-001")
     for campo, valor in body.model_dump(exclude_none=True).items():
         setattr(tasa, campo, valor)
     db.commit()
@@ -148,7 +149,7 @@ def eliminar_tasa(
 ):
     tasa = db.query(TasaMercadoRef).filter(TasaMercadoRef.id == tasa_id).first()
     if not tasa:
-        raise HTTPException(status_code=404, detail="Tasa no encontrada")
+        raise error_http("ADM-001")
     db.delete(tasa)
     db.commit()
 
@@ -179,10 +180,7 @@ def poblar_tasas_icea(
     """
     filas = [t for t in TASAS_ICEA if t[1] == anyo]
     if not filas:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No hay tasas ICEA con fuente verificada para el año {anyo} en el catálogo interno.",
-        )
+        raise error_http("ADM-002", anyo=anyo)
 
     insertados = 0
     omitidos = 0
@@ -298,7 +296,7 @@ def crear_auxiliar_comision(
         AuxiliarComisionRef.auxiliar == body.auxiliar,
     ).first()
     if ya_existe:
-        raise HTTPException(status_code=400, detail="Ya existe una comisión para ese auxiliar en ese año")
+        raise error_http("ADM-003")
 
     fila = AuxiliarComisionRef(
         id=uuid.uuid4(), pct_retencion=calcular_pct_retencion(body.auxiliar), **body.model_dump(),
@@ -318,7 +316,7 @@ def actualizar_auxiliar_comision(
 ):
     fila = db.query(AuxiliarComisionRef).filter(AuxiliarComisionRef.id == auxiliar_id).first()
     if not fila:
-        raise HTTPException(status_code=404, detail="Registro no encontrado")
+        raise error_http("ADM-004")
     datos = body.model_dump(exclude_none=True)
     for campo, valor in datos.items():
         setattr(fila, campo, valor)
@@ -335,7 +333,7 @@ def eliminar_auxiliar_comision(
 ):
     fila = db.query(AuxiliarComisionRef).filter(AuxiliarComisionRef.id == auxiliar_id).first()
     if not fila:
-        raise HTTPException(status_code=404, detail="Registro no encontrado")
+        raise error_http("ADM-004")
     db.delete(fila)
     db.commit()
 
@@ -374,7 +372,7 @@ async def importar_auxiliares_comision_csv(
             break
 
     if df is None:
-        raise HTTPException(status_code=422, detail="No se pudo leer el archivo. Debe ser un CSV con columnas auxiliar y comisión colaborador.")
+        raise error_http("ADM-005")
 
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -397,7 +395,7 @@ async def importar_auxiliares_comision_csv(
 
     faltantes = [n for n, c in [('auxiliar', auxiliar_col), ('comisión colaborador', comision_col)] if not c]
     if faltantes:
-        raise HTTPException(status_code=422, detail=f"Columnas requeridas no encontradas: {', '.join(faltantes)}. Columnas detectadas: {list(df.columns)}")
+        raise error_http("ADM-006", faltan=", ".join(faltantes), detectadas=", ".join(map(str, df.columns)))
 
     def _f(val) -> float:
         try:

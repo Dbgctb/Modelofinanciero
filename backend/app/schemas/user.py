@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID
 from ..models.user import UserRole
 from ..core.security import validate_password_strength
+from ..core.errores import ErrorApp
 
 
 class UserCreate(BaseModel):
@@ -17,19 +18,16 @@ class UserCreate(BaseModel):
     @classmethod
     def password_strength(cls, v: str) -> str:
         if not validate_password_strength(v):
-            raise ValueError(
-                "La contraseña debe tener al menos 10 caracteres, "
-                "una mayúscula, una minúscula, un número y un carácter especial"
-            )
+            raise ErrorApp("AUTH-011")
         return v
 
     @field_validator("username")
     @classmethod
     def username_valid(cls, v: str) -> str:
         if len(v) < 3:
-            raise ValueError("El usuario debe tener al menos 3 caracteres")
+            raise ErrorApp("USR-007")
         if not v.replace("_", "").replace(".", "").isalnum():
-            raise ValueError("El usuario solo puede contener letras, números, _ y .")
+            raise ErrorApp("USR-008")
         return v.lower()
 
 

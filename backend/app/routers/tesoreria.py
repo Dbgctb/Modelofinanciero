@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from uuid import UUID
@@ -18,6 +18,7 @@ from ..models.presupuesto import Presupuesto
 from ..services.tesoreria import (
     calcular_tesoreria, _KEY_COBROS_GLOBAL, _KEY_PAGOS_DEFAULT, _FAMILIA_CESIONES,
 )
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/tesoreria", tags=["Tesorería"])
 
@@ -96,7 +97,7 @@ def crear_apunte(
     current_user: User = Depends(require_gestor_or_admin),
 ):
     if not (1 <= payload.mes <= 12):
-        raise HTTPException(400, "Mes debe estar entre 1 y 12")
+        raise error_http("PRE-006")
     ap = TesoreriaApunteManual(
         presupuesto_id=presupuesto_id,
         created_by_id=current_user.id,
@@ -120,7 +121,7 @@ def eliminar_apunte(
         TesoreriaApunteManual.presupuesto_id == presupuesto_id,
     ).first()
     if not ap:
-        raise HTTPException(404, "Apunte no encontrado")
+        raise error_http("TES-001")
     db.delete(ap)
     db.commit()
 
@@ -136,7 +137,7 @@ def calcular(
     """RF-TES-01/13: calcula el flujo de caja presupuestado completo."""
     p = db.query(Presupuesto).filter(Presupuesto.id == presupuesto_id).first()
     if not p:
-        raise HTTPException(404, "Presupuesto no encontrado")
+        raise error_http("PRE-001")
     _seed_default_configs(db, presupuesto_id)
     resultado = calcular_tesoreria(db, p, caja_inicial, caja_minima)
     return _serializar_resultado(resultado)
@@ -174,7 +175,7 @@ def generar_empleados(presupuesto_id: UUID, db: Session = Depends(get_db),
     """Auto-genera empleados desde cuentas 640* del ejercicio base."""
     p = db.query(Presupuesto).filter(Presupuesto.id == presupuesto_id).first()
     if not p:
-        raise HTTPException(404, "Presupuesto no encontrado")
+        raise error_http("PRE-001")
     ejercicio_base = p.ejercicio_base or (p.ejercicio - 1)
 
     # ── Nombres desde contabilidad base (descripcion_cuenta de 640*) ──────────
@@ -248,7 +249,7 @@ def actualizar_empleado(
         TesoreriaEmpleado.presupuesto_id == presupuesto_id,
     ).first()
     if not emp:
-        raise HTTPException(404, "Empleado no encontrado")
+        raise error_http("TES-002")
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(emp, field, value)
     # Si se marca autónomo, forzar SS a 0
@@ -277,7 +278,7 @@ def _ser_emp(e: TesoreriaEmpleado) -> dict:
 def get_resultado(presupuesto_id: UUID, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     r = db.query(TesoreriaResultado).filter(TesoreriaResultado.presupuesto_id == presupuesto_id).first()
     if not r:
-        raise HTTPException(404, "Aún no se ha calculado la tesorería")
+        raise error_http("TES-003")
     return _serializar_resultado(r)
 
 
@@ -289,7 +290,7 @@ def aprobar_tesoreria(
 ):
     r = db.query(TesoreriaResultado).filter(TesoreriaResultado.presupuesto_id == presupuesto_id).first()
     if not r:
-        raise HTTPException(400, "Calcula la tesorería antes de aprobarla")
+        raise error_http("TES-004")
     r.aprobado = True
     p = db.query(Presupuesto).filter(Presupuesto.id == presupuesto_id).first()
     if p:

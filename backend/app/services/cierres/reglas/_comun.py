@@ -16,6 +16,7 @@ Criterios de traducción desde el original SQLite (ver docs/PLAN_CIERRES_CONTABI
 """
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from ....core.errores import ErrorApp
 
 # SET común a todas las reglas: lo que el original escribía en cada UPDATE.
 SET_PUNTEO = """reconciled = true, recon_rule = :regla, recon_run_id = :run_id,
@@ -69,7 +70,7 @@ def filtro_cuentas_sql(filtro_cuentas, alias: str = "", prefijo_param: str = "fc
         c = str(cuenta).strip()
         base = c.replace("*", "")
         if not base.isdigit():
-            raise ValueError(f"Cuenta no válida en el filtro: {cuenta!r} (solo dígitos y *)")
+            raise ErrorApp("CC-PUN-009", cuenta=repr(cuenta))
         p = f"{prefijo_param}{n}"
         if "*" in c:
             conds.append(f"{alias}cuenta LIKE :{p}")

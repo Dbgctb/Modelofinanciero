@@ -5,6 +5,7 @@ Traducción de la pestaña "Contab. Diferencias" del original. Como allí, no se
 nada en la base: la lista de duplicados vive en la pantalla y solo sale en el Excel.
 """
 from sqlalchemy import text
+from ...core.errores import ErrorApp
 
 # Cabeceras exactas de la plantilla de importación de asientos del ERP (43 columnas).
 CABECERAS = [
@@ -27,7 +28,7 @@ def cargar_asiento(conn, ejercicio: int, numero: int):
         FROM cc_apuntes WHERE ejercicio = :ej AND numero = :n ORDER BY linea, id
     """), {"ej": ejercicio, "n": numero}).mappings().all()
     if not filas:
-        raise ValueError(f"No se encontró el asiento {numero} en el ejercicio {ejercicio}")
+        raise ErrorApp("CC-DIF-001", numero=numero, ejercicio=ejercicio)
     return [dict(f) for f in filas]
 
 

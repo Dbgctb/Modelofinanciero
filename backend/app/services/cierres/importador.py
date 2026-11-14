@@ -21,6 +21,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from .normalizador import extract_recibo, normalize_concepto
+from ...core.errores import ErrorApp
 
 log = logging.getLogger(__name__)
 
@@ -32,11 +33,32 @@ COLUMNAS_BD = ["linea", "serie", "numero", "ejercicio", "fecha", "debe", "haber"
 
 # ── Lectura ──────────────────────────────────────────────────────────────────
 
+def _comprobar_columnas(df: pd.DataFrame, es_txt: bool = False) -> None:
+    """Antes de usar ninguna columna: si no es el diario del ERP, decir qué le falta.
+
+    Si un TXT/CSV sale con una sola columna, se mira si está separado por otro carácter
+    (p. ej. los excel_AAAA.csv del programa antiguo van por comas) para decirlo claro.
+    """
+    columnas = [str(c).strip() for c in df.columns]
+    if es_txt and len(columnas) == 1:
+        for sep in (";", ",", "\t"):
+            partes = [c.strip() for c in columnas[0].split(sep)]
+            if len(partes) > 1:
+                if all(c in partes for c in COLUMNAS_REQUERIDAS):
+                    raise ErrorApp("CC-IMP-004", separador="tabulador" if sep == "\t" else sep)
+                columnas = partes
+                break
+    faltan = [c for c in COLUMNAS_REQUERIDAS if c not in columnas]
+    if faltan:
+        raise ErrorApp("CC-IMP-003", faltan=", ".join(faltan), encontradas=", ".join(columnas))
+
+
 def _leer_excel(contenido: bytes) -> pd.DataFrame:
     df = pd.read_excel(io.BytesIO(contenido), dtype={
         "Linea": int, "Serie": str, "Numero": int, "Ejercicio": int,
         "Numero de Cuenta": int, "Descripcion Cuenta": str, "Concepto": str,
     })
+    _comprobar_columnas(df)
     df["Fecha"] = pd.to_datetime(df["Fecha"], dayfirst=True, errors="coerce")
     return df
 
@@ -49,12 +71,13 @@ def _leer_txt(contenido: bytes) -> pd.DataFrame:
         except UnicodeDecodeError:
             continue
     else:
-        raise ValueError("No se reconoce la codificación del fichero (ni UTF-8 ni Windows-1252).")
+        raise ErrorApp("CC-IMP-001")
     df = pd.read_csv(io.StringIO(texto), sep="|", decimal=",", thousands=".", dtype={
         "Linea": int, "Serie": str, "Numero": int, "Ejercicio": int, "Numero de Cuenta": int,
     })
     if df.columns[-1] == "" or "Unnamed" in str(df.columns[-1]):
         df = df.iloc[:, :-1]
+    _comprobar_columnas(df, es_txt=True)
     df["Fecha"] = pd.to_datetime(df["Fecha"], format="%d/%m/%Y", errors="coerce")
     return df
 
@@ -67,27 +90,25 @@ def leer_fichero(nombre: str, contenido: bytes) -> pd.DataFrame:
         elif ext in ("txt", "csv"):
             df = _leer_txt(contenido)
         else:
-            raise ValueError(f"Formato no soportado: .{ext} (usa Excel o TXT/CSV)")
-    except ValueError:
+            raise ErrorApp("CC-IMP-002", ext=ext)
+    except ErrorApp:
         raise
-    except Exception as e:
-        raise ValueError(f"No se pudo leer el fichero: {type(e).__name__}. "
-                         "Comprueba que es el diario exportado del ERP.") from e
-    if "Ejercicio" not in df.columns:
-        raise ValueError("El fichero NO tiene columna 'Ejercicio'. Columnas: " + ", ".join(map(str, df.columns)))
+    except Exception as e:  # incluye ValueError de pandas (p. ej. texto en una columna numérica)
+        log.warning("Cierres importar | no se pudo leer '%s': %s: %s", nombre, type(e).__name__, e)
+        raise ErrorApp("CC-IMP-005", tipo=type(e).__name__) from e
     return df
 
 
 def _validar_y_normalizar(df: pd.DataFrame) -> pd.DataFrame:
     faltan = [c for c in COLUMNAS_REQUERIDAS if c not in df.columns]
     if faltan:
-        raise ValueError(f"Columnas faltantes: {faltan}")
+        raise ErrorApp("CC-IMP-003", faltan=", ".join(faltan), encontradas=", ".join(map(str, df.columns)))
     df = df.copy()
     df["Debe"] = df["Debe"].fillna(0)
     df["Haber"] = df["Haber"].fillna(0)
     sin_fecha = int(df["Fecha"].isna().sum())
     if sin_fecha:
-        raise ValueError(f"Hay {sin_fecha} filas con fecha inválida; revisa el fichero.")
+        raise ErrorApp("CC-IMP-006", n=sin_fecha)
     if "Descripcion Cuenta" not in df.columns:
         df["Descripcion Cuenta"] = None
     df["recibo_norm"] = df["Concepto"].apply(extract_recibo)
@@ -136,10 +157,9 @@ def importar_completo(engine, nombre, contenido, ejercicio: int, limpiar: bool, 
     df = leer_fichero(nombre, contenido)
     ejercicios = sorted(df["Ejercicio"].dropna().astype(int).unique().tolist())
     if not ejercicios:
-        raise ValueError("El fichero no contiene datos con ejercicio válido.")
+        raise ErrorApp("CC-IMP-007")
     if ejercicio not in ejercicios:
-        raise ValueError(f"El fichero no contiene el ejercicio {ejercicio} (contiene: {ejercicios}). "
-                         "No se ha borrado ni importado nada.")
+        raise ErrorApp("CC-IMP-008", ejercicio=ejercicio, ejercicios=", ".join(map(str, ejercicios)))
     df = df[df["Ejercicio"] == ejercicio]
     progreso(f"Normalizando {len(df):,} apuntes…".replace(",", "."))
     df = _validar_y_normalizar(df)
@@ -171,7 +191,7 @@ def importar_incremental(engine, nombre, contenido, ejercicio: int, progreso=lam
     df = leer_fichero(nombre, contenido)
     df = df[df["Ejercicio"] == ejercicio]
     if len(df) == 0:
-        raise ValueError(f"El fichero no contiene datos del ejercicio {ejercicio}.")
+        raise ErrorApp("CC-IMP-009", ejercicio=ejercicio)
     progreso(f"Comparando {len(df):,} apuntes con la base…".replace(",", "."))
     df = _validar_y_normalizar(df)
 

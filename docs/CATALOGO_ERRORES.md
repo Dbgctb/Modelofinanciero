@@ -1,0 +1,265 @@
+# Catálogo de errores
+
+Todos los errores que la aplicación muestra al usuario llevan un código entre corchetes, por ejemplo `[CC-IMP-003]`. Busca aquí el código para ver qué significa y qué hacer.
+
+> Documento generado desde `backend/app/core/errores.py` con `python scripts/catalogo_errores.py --escribir`. No lo edites a mano.
+
+Los valores entre llaves (`{faltan}`, `{n}`…) se sustituyen por los datos concretos del error.
+
+## Índice
+
+- [GEN · General](#gen--general) (4)
+- [CFG · Configuración del servidor](#cfg--configuración-del-servidor) (2)
+- [ARC · Subida de archivos (común)](#arc--subida-de-archivos-común) (3)
+- [AUTH · Autenticación](#auth--autenticación) (11)
+- [USR · Usuarios](#usr--usuarios) (8)
+- [MAP · Mapeo de cuentas](#map--mapeo-de-cuentas) (4)
+- [CAR · Carga de datos](#car--carga-de-datos) (9)
+- [ADM · Administración](#adm--administración) (6)
+- [ANA · Analítico](#ana--analítico) (5)
+- [CRS · Cross-selling](#crs--cross-selling) (6)
+- [PRE · Presupuesto](#pre--presupuesto) (17)
+- [REA · Seguimiento real](#rea--seguimiento-real) (3)
+- [TES · Tesorería](#tes--tesorería) (4)
+- [CC-GEN · Cierres · general](#cc-gen--cierres--general) (3)
+- [CC-IMP · Cierres · importar diario](#cc-imp--cierres--importar-diario) (9)
+- [CC-PUN · Cierres · punteo automático y controles](#cc-pun--cierres--punteo-automático-y-controles) (10)
+- [CC-MAN · Cierres · punteo manual](#cc-man--cierres--punteo-manual) (10)
+- [CC-REC · Cierres · recobros](#cc-rec--cierres--recobros) (2)
+- [CC-DIF · Cierres · asientos de diferencias](#cc-dif--cierres--asientos-de-diferencias) (1)
+- [CC-BAN · Cierres · conciliación bancaria](#cc-ban--cierres--conciliación-bancaria) (18)
+
+## GEN — General
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `GEN-001` | 500 | Error interno del servidor. Contacta con el administrador. | Fallo no previsto. El detalle completo está en backend/app.log buscando la hora del error. |
+| `GEN-002` | 500 | Error interno. Revisa el log del servidor. | Una tarea en segundo plano falló de forma no prevista. Detalle en backend/app.log. |
+| `GEN-003` | 403 | No tienes permisos para esta acción | Tu rol no permite esta operación. Pide a un administrador que revise tu rol. |
+| `GEN-004` | 422 | Los datos no tienen el formato esperado. Revisa el fichero o los valores introducidos. | Error de validación sin código propio (p. ej. un texto en una columna numérica de un fichero). El detalle técnico está en backend/app.log. |
+
+## CFG — Configuración del servidor
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CFG-001` | 500 | SECRET_KEY debe tener al menos 32 caracteres | Pon en backend/.env una SECRET_KEY aleatoria de 64 caracteres. |
+| `CFG-002` | 500 | ALLOWED_ORIGINS no puede contener '*' — especifica dominios concretos | Lista en ALLOWED_ORIGINS solo los dominios del frontend (p. ej. http://localhost:5173). |
+
+## ARC — Subida de archivos (común)
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `ARC-001` | 400 | El archivo seleccionado está vacío. Comprueba el fichero antes de subirlo | El fichero subido tiene 0 bytes. Vuelve a exportarlo desde el origen. |
+| `ARC-002` | 415 | Tipo de archivo no permitido. Se esperaba {esperado}. | Sube el fichero en el formato indicado en el mensaje. |
+| `ARC-003` | 413 | Archivo demasiado grande (máximo {max_mb} MB). | Divide el fichero o exporta un periodo más corto. |
+
+## AUTH — Autenticación
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `AUTH-001` | 401 | Usuario o contraseña incorrectos | Revisa usuario y contraseña. Tras varios intentos fallidos la cuenta se bloquea un tiempo. |
+| `AUTH-002` | 423 | Cuenta bloqueada. Inténtalo en {minutos} minutos | Espera a que termine el bloqueo o pide a un administrador que restablezca la contraseña. |
+| `AUTH-003` | 423 | Cuenta bloqueada por {minutos} minutos tras demasiados intentos fallidos | Espera a que termine el bloqueo o usa '¿Olvidaste tu contraseña?'. |
+| `AUTH-004` | 401 | Tu sesión no es válida o ha caducado. Vuelve a iniciar sesión | Vuelve a iniciar sesión. |
+| `AUTH-005` | 401 | El usuario de la sesión ya no existe | Vuelve a iniciar sesión; si persiste, el usuario fue borrado. |
+| `AUTH-006` | 401 | Refresh token inválido | Vuelve a iniciar sesión. |
+| `AUTH-007` | 401 | Refresh token revocado o inválido | Vuelve a iniciar sesión (la sesión se cerró en otro sitio o caducó). |
+| `AUTH-008` | 401 | Usuario inactivo | Un administrador debe reactivar el usuario en Usuarios. |
+| `AUTH-009` | 400 | Contraseña actual incorrecta | Escribe la contraseña con la que has entrado. |
+| `AUTH-010` | 400 | El enlace no es válido o ha caducado. Pide uno nuevo. | Los enlaces de restablecimiento duran 60 minutos y valen una sola vez. |
+| `AUTH-011` | 400 | La contraseña debe tener al menos 10 caracteres, una mayúscula, una minúscula, un número y un carácter especial | Elige una contraseña que cumpla todos los requisitos del mensaje. |
+
+## USR — Usuarios
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `USR-001` | 400 | El email ya está registrado | Usa otro email o edita el usuario existente. |
+| `USR-002` | 400 | El usuario ya existe | Elige otro nombre de usuario. |
+| `USR-003` | 404 | Usuario no encontrado | Recarga la lista de usuarios. |
+| `USR-004` | 400 | No puedes desactivar tu propia cuenta | Pide a otro administrador que lo haga. |
+| `USR-005` | 400 | No puedes eliminarte a ti mismo | Pide a otro administrador que lo haga. |
+| `USR-006` | 404 | Solicitud no encontrada | La solicitud ya se usó o se borró; recarga la lista. |
+| `USR-007` | 400 | El usuario debe tener al menos 3 caracteres | Elige un nombre de usuario más largo. |
+| `USR-008` | 400 | El usuario solo puede contener letras, números, _ y . | Quita espacios y símbolos. |
+
+## MAP — Mapeo de cuentas
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `MAP-001` | 400 | Esta cuenta ya está configurada en el mapeo | Edita el mapeo existente en lugar de crear otro. |
+| `MAP-002` | 404 | Mapeo no encontrado | Recarga la lista de mapeos. |
+| `MAP-003` | 400 | Las cuentas de tipo Ingreso deben tener una compañía asignada | Elige la compañía. |
+| `MAP-004` | 400 | Las cuentas de tipo Gasto deben tener una familia de gasto asignada | Elige la familia de gasto. |
+
+## CAR — Carga de datos
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CAR-001` | 422 | Error procesando el archivo. Revisa el formato e inténtalo de nuevo. | El fichero no tiene el formato esperado. El detalle técnico está en backend/app.log. |
+| `CAR-002` | 404 | Carga histórica no encontrada | Recarga la lista de cargas. |
+| `CAR-003` | 404 | Carga no encontrada | Recarga la lista de cargas. |
+| `CAR-004` | 404 | No hay cargas para el ejercicio {ejercicio} | Comprueba el ejercicio elegido. |
+| `CAR-005` | 404 | Incidencia no encontrada | Recarga la lista de incidencias. |
+| `CAR-006` | 400 | Solo se pueden cerrar cargas de tipo base presupuestaria | Elige una carga base presupuestaria. |
+| `CAR-007` | 400 | La carga ya está cerrada | No hace falta volver a cerrarla. |
+| `CAR-008` | 409 | Hay {n} incidencias críticas pendientes. Resuélvelas antes de cerrar. | Resuelve las incidencias críticas de la carga y vuelve a cerrarla. |
+| `CAR-009` | 404 | Carga de recibos no encontrada | Recarga la lista de cargas. |
+
+## ADM — Administración
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `ADM-001` | 404 | Tasa no encontrada | Recarga la lista de tasas. |
+| `ADM-002` | 404 | No hay tasas ICEA con fuente verificada para el año {anyo} en el catálogo interno. | Introduce las tasas de ese año a mano. |
+| `ADM-003` | 400 | Ya existe una comisión para ese auxiliar en ese año | Edita la comisión existente. |
+| `ADM-004` | 404 | Registro no encontrado | Recarga la lista. |
+| `ADM-005` | 422 | No se pudo leer el archivo. Debe ser un CSV con columnas auxiliar y comisión colaborador. | Revisa separador y columnas del CSV. |
+| `ADM-006` | 422 | Columnas requeridas no encontradas: {faltan}. Columnas detectadas: {detectadas} | Renombra las columnas del fichero como indica el mensaje. |
+
+## ANA — Analítico
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `ANA-001` | 400 | Naturaleza inválida. Valores posibles: {valores} | Elige una de las naturalezas listadas. |
+| `ANA-002` | 404 | Cuenta no encontrada | Recarga la lista de cuentas. |
+| `ANA-003` | 400 | Driver inválido. Valores posibles: {valores} | Elige uno de los drivers listados. |
+| `ANA-004` | 404 | Tarea no encontrada o expirada | El servidor se reinició o la tarea caducó; lánzala de nuevo. |
+| `ANA-005` | 404 | Ajuste no encontrado | Recarga la lista de ajustes. |
+
+## CRS — Cross-selling
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CRS-001` | 500 | Error al recalcular. Revisa los logs. | Detalle en backend/app.log. |
+| `CRS-002` | 500 | Error al calcular estadísticas de ramo. | Detalle en backend/app.log. |
+| `CRS-003` | 422 | Error procesando el archivo de clientes. | Revisa el formato (ver CLAUDE.md del proyecto). Detalle en backend/app.log. |
+| `CRS-004` | 404 | Acción no encontrada | Recarga la lista de acciones. |
+| `CRS-005` | 422 | No se pudo leer el archivo. Asegúrate de que es CSV o Excel. | Exporta de nuevo el fichero de clientes. |
+| `CRS-006` | 422 | Columnas requeridas no encontradas: {faltan}. Columnas detectadas: {detectadas} | Columnas esperadas: Código;Nombre;F.Alta;F.Nacimie;Fis/Jur;T. Fijo;T. Móvil;E-Mail. |
+
+## PRE — Presupuesto
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `PRE-001` | 404 | Presupuesto no encontrado | Recarga la página o elige otro presupuesto. |
+| `PRE-002` | 409 | El ejercicio {ejercicio} no está cerrado. Cierra primero la carga base antes de presupuestar. | En Carga de datos, cierra la carga base del ejercicio. |
+| `PRE-003` | 400 | La línea está bloqueada tras aprobación | Reabre el presupuesto para modificarla. |
+| `PRE-004` | 400 | No hay líneas de ingresos generadas | Genera primero las líneas de ingresos. |
+| `PRE-005` | 400 | El presupuesto de ingresos ya está abierto | No hace falta reabrirlo. |
+| `PRE-006` | 400 | El mes debe estar entre 1 y 12 | Elige un mes válido. |
+| `PRE-007` | 409 | Hay {n} líneas de gasto sin familia asignada | Asigna familia a todas las líneas de gasto. |
+| `PRE-008` | 400 | Solo se pueden reabrir gastos cuando están aprobados, la tesorería aprobada o el presupuesto cerrado | Revisa el estado del presupuesto. |
+| `PRE-009` | 400 | El presupuesto ya está cerrado | No hace falta volver a cerrarlo. |
+| `PRE-010` | 400 | No se puede cerrar un presupuesto en borrador | Aprueba antes el presupuesto. |
+| `PRE-011` | 400 | El presupuesto debe estar cerrado (estado actual: {estado}) | Cierra antes el presupuesto. |
+| `PRE-012` | 404 | Cesión no encontrada | Recarga la lista de cesiones. |
+| `PRE-013` | 400 | Cesión bloqueada | Reabre el presupuesto para modificarla. |
+| `PRE-014` | 404 | Línea no encontrada | Recarga la página. |
+| `PRE-015` | 400 | El presupuesto está cerrado | Un presupuesto cerrado no se puede modificar. |
+| `PRE-016` | 422 | Columna 'Auxiliar' requerida no encontrada | Añade la columna Auxiliar al fichero. |
+| `PRE-017` | 422 | Columnas requeridas no encontradas: {faltan} | Añade las columnas indicadas al fichero. |
+
+## REA — Seguimiento real
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `REA-001` | 400 | El mes no tiene carga vinculada | Vincula una carga al mes antes de cerrarlo. |
+| `REA-002` | 409 | Hay incidencias críticas pendientes en este mes | Resuelve las incidencias críticas del mes. |
+| `REA-003` | 404 | Mes no encontrado | Recarga la página. |
+
+## TES — Tesorería
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `TES-001` | 404 | Apunte no encontrado | Recarga la página. |
+| `TES-002` | 404 | Empleado no encontrado | Recarga la lista de empleados. |
+| `TES-003` | 404 | Aún no se ha calculado la tesorería | Pulsa Calcular. |
+| `TES-004` | 400 | Calcula la tesorería antes de aprobarla | Pulsa Calcular y después Aprobar. |
+
+## CC-GEN — Cierres · general
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CC-GEN-001` | 409 | Ya hay una importación o un punteo en curso. Espera a que termine. | Solo puede haber una tarea que escriba a la vez. Espera a que acabe la que está en marcha. |
+| `CC-GEN-002` | 404 | Tarea no encontrada (¿se reinició el servidor?) | Las tareas viven en memoria: si el backend se reinicia se pierden. Lánzala de nuevo. |
+| `CC-GEN-003` | 404 | El fichero ya no está disponible; vuelve a generarlo. | Los Excel generados son temporales. Genera de nuevo la exportación. |
+
+## CC-IMP — Cierres · importar diario
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CC-IMP-001` | 400 | No se reconoce la codificación del fichero (ni UTF-8 ni Windows-1252). | Exporta de nuevo el diario desde el ERP sin cambiar la codificación. |
+| `CC-IMP-002` | 400 | Formato no soportado: .{ext} (usa Excel o TXT/CSV) | Sube el diario como .xlsx, .xls, .txt o .csv. |
+| `CC-IMP-003` | 400 | Este fichero no es el diario exportado del ERP: le faltan las columnas {faltan}. Columnas encontradas: {encontradas}. | Exporta el diario desde el ERP. Columnas obligatorias: Linea, Serie, Numero, Ejercicio, Fecha, Debe, Haber, Numero de Cuenta y Concepto. Los ficheros intermedios excel_AAAA.csv del programa antiguo no valen (no tienen Fecha, Debe ni Haber). |
+| `CC-IMP-004` | 400 | El diario en TXT/CSV debe ir separado por '\|' y este fichero usa '{separador}'. | Exporta el diario desde el ERP con el separador \| o súbelo en Excel. |
+| `CC-IMP-005` | 400 | No se pudo leer el fichero ({tipo}). Comprueba que es el diario exportado del ERP. | El fichero está dañado o tiene datos no numéricos en Linea, Numero, Ejercicio o Numero de Cuenta. Detalle en backend/app.log. |
+| `CC-IMP-006` | 400 | Hay {n} filas con fecha inválida; revisa el fichero. | Corrige o quita las filas sin fecha (formato dd/mm/aaaa). |
+| `CC-IMP-007` | 400 | El fichero no contiene datos con ejercicio válido. | La columna Ejercicio está vacía; exporta de nuevo el diario. |
+| `CC-IMP-008` | 400 | El fichero no contiene el ejercicio {ejercicio} (contiene: {ejercicios}). No se ha borrado ni importado nada. | Elige en pantalla uno de los ejercicios que contiene el fichero. |
+| `CC-IMP-009` | 400 | El fichero no contiene datos del ejercicio {ejercicio}. | Elige en pantalla el ejercicio que contiene el fichero. |
+
+## CC-PUN — Cierres · punteo automático y controles
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CC-PUN-001` | 400 | Elige al menos un ejercicio. | Marca uno o más ejercicios. |
+| `CC-PUN-002` | 400 | Regla desconocida: {codigo} | Recarga la lista de reglas. |
+| `CC-PUN-003` | 400 | La tolerancia debe estar entre 0 y 10.000 € | Pon una tolerancia dentro del rango. |
+| `CC-PUN-004` | 400 | Tipo de control no válido (C, D, K o L) | Elige uno de los tipos de control. |
+| `CC-PUN-005` | 400 | La cuenta debe ser numérica (se usa como prefijo; en D, exacta) | Escribe solo dígitos. |
+| `CC-PUN-006` | 400 | El control C necesita mínimo y máximo de movimientos (mínimo ≤ máximo) | Rellena ambos valores. |
+| `CC-PUN-007` | 400 | El control D necesita una tolerancia en % | Rellena la tolerancia. |
+| `CC-PUN-008` | 400 | La cuenta de control no existe | Recarga la lista de cuentas de control. |
+| `CC-PUN-009` | 400 | Cuenta no válida en el filtro: {cuenta} (solo dígitos y *) | Corrige el filtro de cuentas. |
+| `CC-PUN-010` | 400 | Control desconocido | Recarga la página y elige controles de la lista. |
+
+## CC-MAN — Cierres · punteo manual
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CC-MAN-001` | 400 | La cuenta solo admite dígitos y * | Corrige el filtro de cuenta. |
+| `CC-MAN-002` | 400 | Hay {n} apuntes con esos filtros; acota la búsqueda (máximo {maximo}). | Añade filtros (cuenta, fechas, importe) para reducir la selección. |
+| `CC-MAN-003` | 400 | Selecciona al menos 2 apuntes. | Marca dos o más apuntes. |
+| `CC-MAN-004` | 400 | Algún apunte seleccionado ya no existe; vuelve a buscar. | Repite la búsqueda. |
+| `CC-MAN-005` | 400 | {n} de los apuntes seleccionados ya están punteados; quítalos de la selección. | Desmarca los apuntes ya punteados. |
+| `CC-MAN-006` | 400 | Los apuntes deben ser de la MISMA cuenta. Seleccionadas: {cuentas} | Selecciona apuntes de una sola cuenta. |
+| `CC-MAN-007` | 400 | La suma ({suma:.2f} €) supera la tolerancia (±{tolerancia:.2f} €). | Ajusta la selección o sube la tolerancia. |
+| `CC-MAN-008` | 400 | La cuenta debe ser numérica y empezar por 572. | Escribe una cuenta 572… |
+| `CC-MAN-009` | 400 | El apunte no existe. | Repite la búsqueda. |
+| `CC-MAN-010` | 400 | Solo se puede cambiar la cuenta de apuntes 572* no punteados. | Elige un apunte 572 sin puntear. |
+
+## CC-REC — Cierres · recobros
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CC-REC-001` | 400 | Escribe el concepto del recobro (p. ej. RECOBRO COMISIONES) | Rellena el concepto. |
+| `CC-REC-002` | 400 | Algún cobro ya está conciliado o no es de la cuenta del recobro | Recarga el diagnóstico y vuelve a seleccionar. |
+
+## CC-DIF — Cierres · asientos de diferencias
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CC-DIF-001` | 400 | No se encontró el asiento {numero} en el ejercicio {ejercicio} | Comprueba número de asiento y ejercicio. |
+
+## CC-BAN — Cierres · conciliación bancaria
+
+| Código | HTTP | Mensaje | Qué hacer |
+|---|---|---|---|
+| `CC-BAN-001` | 400 | Banco no encontrado o sin cuenta 572 | Revisa la configuración del banco. |
+| `CC-BAN-002` | 400 | El fichero está vacío | Descarga de nuevo el extracto del banco. |
+| `CC-BAN-003` | 400 | Línea {linea} del extracto no válida (registro 22) | El extracto Norma 43 está dañado; descárgalo de nuevo. |
+| `CC-BAN-004` | 400 | No es un fichero Norma 43 (no hay registros de cabecera 11) | Sube un extracto Norma 43 o usa la importación de Excel/CSV con mapeo. |
+| `CC-BAN-005` | 400 | La cuenta contable debe ser numérica y empezar por 572 | Escribe una cuenta 572… |
+| `CC-BAN-006` | 400 | El banco necesita un nombre | Rellena el nombre. |
+| `CC-BAN-007` | 400 | Ya existe un banco con ese nombre | Usa otro nombre. |
+| `CC-BAN-008` | 400 | El banco no existe | Recarga la lista de bancos. |
+| `CC-BAN-009` | 400 | El banco tiene {n} movimientos de extracto; desactívalo en lugar de borrarlo | Desmarca 'activo' en lugar de borrar. |
+| `CC-BAN-010` | 400 | Banco no encontrado | Recarga la lista de bancos. |
+| `CC-BAN-011` | 400 | Los días del nivel 2 deben estar entre 0 y 30 | Pon un valor dentro del rango. |
+| `CC-BAN-012` | 400 | Las tolerancias deben estar entre 0 y 1.000 € | Pon valores dentro del rango. |
+| `CC-BAN-013` | 400 | Cuenta del fichero no válida | Elige una de las cuentas que contiene el extracto. |
+| `CC-BAN-014` | 400 | El fichero no tiene movimientos | Comprueba el periodo del extracto. |
+| `CC-BAN-015` | 400 | No se pudo leer el fichero (separador o codificación no reconocidos) | Guarda el fichero como Excel o CSV separado por ; , tabulador o \|. |
+| `CC-BAN-016` | 400 | Falta la columna de {campo} en el mapeo | Asigna en el mapeo la columna indicada. |
+| `CC-BAN-017` | 400 | Algún movimiento ya no está pendiente (o no es de este banco y ejercicio); actualiza la lista | Recarga los pendientes. |
+| `CC-BAN-018` | 400 | Marca al menos un movimiento del banco y un apunte del diario | Selecciona en ambas tablas. |

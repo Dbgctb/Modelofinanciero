@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..core.database import engine, get_db
 from ..core.dependencies import get_current_user, require_gestor_or_admin
+from ..core.errores import detalle_usuario
 from ..models.user import User
 from ..services.cierres import consultas, diferencias, exportar, recobros, tareas
 
@@ -19,7 +20,7 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _400(e: ValueError):
-    raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(status_code=400, detail=detalle_usuario(e))
 
 
 # ── Recobros (Diagnóstico H) ─────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import time
 from decimal import Decimal
 
 from sqlalchemy import text
+from ...core.errores import ErrorApp
 
 COLUMNAS_APUNTE = """id, ejercicio, fecha, cuenta, descripcion_cuenta, concepto, recibo_norm,
                      asiento_key, debe, haber, neto, reconciled, recon_rule, recon_group_id,
@@ -24,7 +25,7 @@ def _cuenta_cond(cuenta: str, params: dict, alias: str = "") -> str | None:
         return None
     base = c.replace("*", "")
     if not base.isdigit():
-        raise ValueError("La cuenta solo admite dígitos y *")
+        raise ErrorApp("CC-MAN-001")
     if "*" in c or len(base) < 10:
         params["cuenta"] = base + "%"
         return f"{alias}cuenta LIKE :cuenta"
@@ -129,7 +130,7 @@ def ids_manual(conn, filtros: dict):
     where, params = _where_manual(filtros)
     n = conn.execute(text(f"SELECT COUNT(*) FROM cc_apuntes WHERE {where}"), params).scalar()
     if n > MAX_SELECCION:
-        raise ValueError(f"Hay {n:,} apuntes con esos filtros; acota la búsqueda (máximo {MAX_SELECCION:,}).".replace(",", "."))
+        raise ErrorApp("CC-MAN-002", n=f"{n:,}".replace(",", "."), maximo=f"{MAX_SELECCION:,}".replace(",", "."))
     ids = conn.execute(text(f"SELECT id FROM cc_apuntes WHERE {where} ORDER BY id"), params).scalars().all()
     return {"ids": ids}
 
@@ -152,18 +153,17 @@ def puntear_manual(conn, ids: list[int], tolerancia: float):
     """
     ids = sorted(set(int(i) for i in ids))
     if len(ids) < 2:
-        raise ValueError("Selecciona al menos 2 apuntes.")
+        raise ErrorApp("CC-MAN-003")
     s = resumen_seleccion(conn, ids)
     if s["n"] != len(ids):
-        raise ValueError("Algún apunte seleccionado ya no existe; vuelve a buscar.")
+        raise ErrorApp("CC-MAN-004")
     if s["punteados"]:
-        raise ValueError(f"{s['punteados']} de los apuntes seleccionados ya están punteados; "
-                         "quítalos de la selección.")
+        raise ErrorApp("CC-MAN-005", n=s["punteados"])
     if len(s["cuentas"]) > 1:
-        raise ValueError("Los apuntes deben ser de la MISMA cuenta. Seleccionadas: " + ", ".join(s["cuentas"]))
+        raise ErrorApp("CC-MAN-006", cuentas=", ".join(s["cuentas"]))
     suma = Decimal(str(s["suma"]))
     if abs(suma) > Decimal(str(tolerancia)):
-        raise ValueError(f"La suma ({s['suma']:.2f} €) supera la tolerancia (±{tolerancia:.2f} €).")
+        raise ErrorApp("CC-MAN-007", suma=s["suma"], tolerancia=tolerancia)
     gid = f"MANUAL|{int(time.time())}|{ids[0]}"
     n = conn.execute(text("""
         UPDATE cc_apuntes SET reconciled = true, recon_rule = 'MANUAL', recon_group_id = :gid,
@@ -177,13 +177,13 @@ def cambiar_cuenta_572(conn, apunte_id: int, cuenta: str):
     """Cambia la cuenta de un apunte 572* no punteado a otra 572* (como el original)."""
     cuenta = (cuenta or "").strip()
     if not (cuenta.isdigit() and cuenta.startswith("572")):
-        raise ValueError("La cuenta debe ser numérica y empezar por 572.")
+        raise ErrorApp("CC-MAN-008")
     actual = conn.execute(text("SELECT cuenta, reconciled FROM cc_apuntes WHERE id = :id"),
                           {"id": apunte_id}).mappings().first()
     if not actual:
-        raise ValueError("El apunte no existe.")
+        raise ErrorApp("CC-MAN-009")
     if actual["reconciled"] or not actual["cuenta"].startswith("572"):
-        raise ValueError("Solo se puede cambiar la cuenta de apuntes 572* no punteados.")
+        raise ErrorApp("CC-MAN-010")
     conn.execute(text("UPDATE cc_apuntes SET cuenta = :c WHERE id = :id AND NOT reconciled"),
                  {"c": cuenta, "id": apunte_id})
     return {"id": apunte_id, "cuenta_anterior": actual["cuenta"], "cuenta": cuenta}

@@ -22,6 +22,7 @@ from collections import defaultdict
 from itertools import combinations
 
 from sqlalchemy import text
+from ...core.errores import ErrorApp
 
 SEP = "§"  # separador de la clave de grupo que viaja a la pantalla
 
@@ -41,7 +42,7 @@ def _combo(cands, objetivo, tol=1e-5):
 def diagnostico(conn, ejercicio: int, concepto: str, cuenta: str | None = None) -> dict:
     concepto = (concepto or "").strip()
     if not concepto:
-        raise ValueError("Escribe el concepto del recobro (p. ej. RECOBRO COMISIONES)")
+        raise ErrorApp("CC-REC-001")
     p = {"ej": ejercicio, "con": f"%{concepto}%"}
     filtro_cuenta = ""
     if cuenta:
@@ -228,7 +229,7 @@ def guardar_emparejamientos(conn, grupo: str, recibo: str, neto_recobros: float,
         SELECT id FROM cc_apuntes WHERE id = ANY(:ids) AND cuenta = :c AND NOT reconciled"""),
         {"ids": cobro_ids, "c": cuenta}).scalars().all()
     if len(validos) != len(set(cobro_ids)):
-        raise ValueError("Algún cobro ya está conciliado o no es de la cuenta del recobro")
+        raise ErrorApp("CC-REC-002")
     nuevos = 0
     for cid in validos:
         nuevos += conn.execute(text("""

@@ -20,6 +20,7 @@ from ..models.user import User
 from ..services.cierres import consultas, excel, importador, punteo, tareas
 from ..services.cierres.controles import CONTROLES, resumen_incidencias
 from ..services.cierres.resumen import resumen_por_ejercicio
+from ..core.errores import ErrorApp, detalle_usuario, error_http
 
 router = APIRouter(prefix="/cierres", tags=["cierres"])
 log = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ MAX_FICHERO = 80 * 1024 * 1024  # el diario de un ejercicio (~140.000 líneas) c
 
 
 def _400(e: ValueError):
-    raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(status_code=400, detail=detalle_usuario(e))
 
 
 def _ocupado(e: tareas.TareaOcupada):
@@ -48,7 +49,7 @@ def get_resumen(db: Session = Depends(get_db), _=Depends(get_current_user)):
 def get_tarea(task_id: str, _=Depends(get_current_user)):
     t = tareas.estado(task_id)
     if not t:
-        raise HTTPException(status_code=404, detail="Tarea no encontrada (¿se reinició el servidor?)")
+        raise error_http("CC-GEN-002")
     res = t.get("resultado")
     if isinstance(res, dict) and "archivo" in res:  # no se expone la ruta del servidor
         t["resultado"] = {k: v for k, v in res.items() if k != "archivo"} | {"descargable": True}
@@ -61,7 +62,7 @@ def descargar(task_id: str, _=Depends(get_current_user)):
     res = (t or {}).get("resultado") or {}
     ruta = res.get("archivo")
     if not ruta or not os.path.isfile(ruta):
-        raise HTTPException(status_code=404, detail="El fichero ya no está disponible; vuelve a generarlo.")
+        raise error_http("CC-GEN-003")
     return FileResponse(ruta, filename=res.get("nombre", "export.xlsx"),
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -78,14 +79,14 @@ async def post_importar(
 ):
     contenido = await file.read()
     if not contenido:
-        raise HTTPException(status_code=400, detail="El archivo está vacío")
+        raise error_http("ARC-001")
     if len(contenido) > MAX_FICHERO:
-        raise HTTPException(status_code=413, detail="Archivo demasiado grande (máximo 80 MB)")
+        raise error_http("ARC-003", max_mb=80)
     nombre = file.filename or ""
     ext = nombre.lower().rsplit(".", 1)[-1] if "." in nombre else ""
     permitidos = TIPOS_EXCEL if ext in ("xlsx", "xls") else TIPOS_TXT if ext in ("txt", "csv") else set()
     if file.content_type not in permitidos:
-        raise HTTPException(status_code=415, detail="Tipo de archivo no permitido (Excel o TXT/CSV del diario)")
+        raise error_http("ARC-002", esperado="Excel o TXT/CSV del diario")
     log.info("Cierres importar | fichero='%s' ejercicio=%d modo=%s limpiar=%s user='%s'",
              nombre, ejercicio, modo, limpiar, user.username)
     try:
@@ -189,7 +190,7 @@ def post_punteo(body: PunteoPeticion, user: User = Depends(require_gestor_or_adm
     try:
         filtro_cuentas_sql(body.filtro_cuentas)  # valida antes de lanzar
         if any(c not in CONTROLES for c in body.controles):
-            raise ValueError("Control desconocido")
+            raise ErrorApp("CC-PUN-010")
     except ValueError as e:
         _400(e)
     log.info("Cierres punteo | ejercicios=%s filtro=%s controles=%s user='%s'",

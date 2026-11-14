@@ -16,6 +16,7 @@ from ..core.dependencies import get_current_user, require_gestor_or_admin
 from ..models.user import User
 from ..services.cierres import consultas, tareas
 from ..services.cierres.banco import motor, servicio
+from ..core.errores import detalle_usuario, error_http
 
 router = APIRouter(prefix="/cierres/banco", tags=["cierres-banco"])
 log = logging.getLogger(__name__)
@@ -26,17 +27,17 @@ TIPOS = {"text/plain", "application/octet-stream", "text/csv", "application/csv"
 
 
 def _400(e: ValueError):
-    raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(status_code=400, detail=detalle_usuario(e))
 
 
 async def _leer(file: UploadFile) -> bytes:
     contenido = await file.read()
     if not contenido:
-        raise HTTPException(status_code=400, detail="El archivo está vacío")
+        raise error_http("ARC-001")
     if len(contenido) > MAX_EXTRACTO:
-        raise HTTPException(status_code=413, detail="Archivo demasiado grande (máximo 20 MB)")
+        raise error_http("ARC-003", max_mb=20)
     if file.content_type not in TIPOS:
-        raise HTTPException(status_code=415, detail="Tipo de archivo no permitido (Norma 43, Excel o CSV)")
+        raise error_http("ARC-002", esperado="Norma 43, Excel o CSV")
     return contenido
 
 

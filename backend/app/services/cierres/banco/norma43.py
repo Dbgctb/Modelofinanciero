@@ -8,6 +8,7 @@ código de concepto del registro 22 y, después, por el texto del concepto (regi
 import logging
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from ....core.errores import ErrorApp
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def leer_norma43(contenido: bytes) -> list[dict]:
     """Devuelve una lista de cuentas: {cuenta, iban, ..., movimientos: [...]}."""
     lineas = contenido.decode("latin-1").splitlines()
     if not lineas:
-        raise ValueError("El fichero está vacío")
+        raise ErrorApp("CC-BAN-002")
     cuentas, i = [], 0
     while i < len(lineas):
         if not lineas[i].startswith("11"):
@@ -106,7 +107,7 @@ def leer_norma43(contenido: bytes) -> list[dict]:
                 try:
                     mov = _movimiento(l)
                 except (InvalidOperation, IndexError) as e:
-                    raise ValueError(f"Línea {j + 1} del extracto no válida (registro 22)") from e
+                    raise ErrorApp("CC-BAN-003", linea=j + 1) from e
                 k, conceptos = j + 1, []
                 while k < len(lineas) and lineas[k].startswith("23"):
                     conceptos.append(lineas[k][4:].rstrip())
@@ -127,5 +128,5 @@ def leer_norma43(contenido: bytes) -> list[dict]:
         cuentas.append(cab)
         i = j
     if not cuentas:
-        raise ValueError("No es un fichero Norma 43 (no hay registros de cabecera 11)")
+        raise ErrorApp("CC-BAN-004")
     return cuentas

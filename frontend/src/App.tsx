@@ -48,7 +48,8 @@ let _notify: ((msg: string, type?: 'error' | 'warning' | 'info') => void) | null
 function msgFromError(error: any): string {
   const status = error?.response?.status
   const detail = error?.response?.data?.detail
-  if (typeof detail === 'string' && detail.length < 200) return detail
+  // 600: los mensajes del catálogo ("[CODIGO] …") pueden listar columnas de un fichero
+  if (typeof detail === 'string' && detail.length < 600) return detail
   if (status === 403) return 'No tienes permisos para esta acción.'
   if (status === 404) return 'Recurso no encontrado.'
   if (status && status >= 500) return 'Error del servidor. Inténtalo de nuevo más tarde.'

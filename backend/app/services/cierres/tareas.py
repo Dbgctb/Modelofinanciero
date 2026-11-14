@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import uuid
+from ...core.errores import ErrorApp, texto
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def lanzar(tipo: str, funcion, *args, escribe: bool = False, usuario: str | None
     `archivo`, la descarga queda disponible por el task_id.
     """
     if escribe and not _ESCRITURA.acquire(blocking=False):
-        raise TareaOcupada("Ya hay una importación o un punteo en curso. Espera a que termine.")
+        raise TareaOcupada(texto("CC-GEN-001"))
     task_id = uuid.uuid4().hex
     _actualizar(task_id, tipo=tipo, estado="en_curso", mensaje="Iniciando…", paso=0, total=None,
                 inicio=time.time(), usuario=usuario, resultado=None, error=None)
@@ -62,7 +63,7 @@ def lanzar(tipo: str, funcion, *args, escribe: bool = False, usuario: str | None
                         segundos=round(time.time() - _TAREAS[task_id]["inicio"], 1))
         except Exception as e:  # el error se muestra en pantalla; el detalle va al log
             log.exception("Tarea %s (%s) fallida", task_id, tipo)
-            mensaje = str(e) if isinstance(e, ValueError) else "Error interno. Revisa el log del servidor."
+            mensaje = str(e) if isinstance(e, ErrorApp) else texto("GEN-002")
             _actualizar(task_id, estado="error", error=mensaje, mensaje="Error")
         finally:
             if escribe:

@@ -1,42 +1,26 @@
 import type { AxiosError } from 'axios'
 
-// ─── Catálogo de errores ───────────────────────────────────────────────────
-// Mapea el campo `detail` del backend a mensajes en español amigables.
-// Soporta coincidencia exacta y coincidencia parcial (startsWith).
+// ─── Traducción de mensajes sin código ─────────────────────────────────────
+// Los errores propios del backend ya llegan como "[CODIGO] mensaje en español"
+// (catálogo único en backend/app/core/errores.py, documentado en
+// docs/CATALOGO_ERRORES.md) y se muestran tal cual. Aquí solo quedan los textos
+// genéricos que generan FastAPI/Pydantic, que no pasan por ese catálogo.
 const CATALOG: Record<string, string> = {
-  // Auth
-  'Credenciales incorrectas': 'Usuario o contraseña incorrectos',
-  'Token inválido o expirado': 'Tu sesión ha expirado. Vuelve a iniciar sesión',
   'No autenticado': 'Debes iniciar sesión para continuar',
-
-  // Mapeo de cuentas
-  'Ya existe un mapeo para esa cuenta': 'Esta cuenta ya está configurada en el sistema',
-  'Ya existe un mapeo para esta cuenta': 'Esta cuenta ya está configurada en el sistema',
-  'Las cuentas de ingreso requieren compañía':
-    'Las cuentas de tipo Ingreso deben tener una compañía asignada',
-  'Las cuentas de gasto requieren familia de gasto':
-    'Las cuentas de tipo Gasto deben tener una familia de gasto asignada',
-  'Mapeo no encontrado': 'No se encontró el mapeo de cuenta solicitado',
+  'Not authenticated': 'Debes iniciar sesión para continuar',
 
   // Errores de validación Pydantic (422) — enum tipo cuenta
   "Input should be 'ingreso', 'gasto' or 'tesoreria_excluida'":
     "El campo 'tipo' debe ser exactamente: ingreso, gasto o tesoreria_excluida (en minúsculas)",
 
-  // Carga de datos
-  'El archivo está vacío': 'El archivo seleccionado está vacío. Comprueba el fichero antes de subirlo',
-  'Error procesando el archivo': 'No se pudo procesar el archivo. Verifica que el formato sea correcto',
-  'Carga no encontrada': 'No se encontró la carga solicitada',
-
-  // Incidencias
-  'Incidencia no encontrada': 'No se encontró la incidencia solicitada',
-
-  // Presupuesto / genéricos
   'Not Found': 'El recurso solicitado no existe',
   'Forbidden': 'No tienes permisos para realizar esta acción',
   'Internal Server Error': 'Error interno del servidor. Contacta con el administrador',
 }
 
 function translateMsg(msg: string): string {
+  // Pydantic antepone "Value error, " a los ValueError de los validadores (p. ej. [AUTH-011])
+  if (msg.startsWith('Value error, ')) msg = msg.slice('Value error, '.length)
   if (CATALOG[msg]) return CATALOG[msg]
   // Coincidencia parcial para mensajes que empiezan por una clave conocida
   for (const [key, val] of Object.entries(CATALOG)) {

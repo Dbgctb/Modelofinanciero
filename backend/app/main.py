@@ -11,6 +11,7 @@ from .core.limiter import limiter
 
 from .core.config import settings
 from .core.database import Base, engine
+from .core.errores import ErrorApp, texto
 from .core.logging_config import setup_logging
 from .routers import auth, users, carga, parametros, presupuesto, tesoreria, real, kpis, analitico, admin, rentabilidad, cuadre, cross_selling, cierres, cierres_banco, cierres_herramientas
 
@@ -48,6 +49,13 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+@app.exception_handler(ErrorApp)
+async def error_app_handler(request: Request, exc: ErrorApp):
+    """ErrorApp que nadie capturó: responde con el estado y el mensaje del catálogo."""
+    log.warning("%s %s → %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=exc.http, content={"detail": str(exc)})
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     log.error(
@@ -60,7 +68,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "Error interno del servidor. Contacta con el administrador."},
+        content={"detail": texto("GEN-001")},
     )
 
 

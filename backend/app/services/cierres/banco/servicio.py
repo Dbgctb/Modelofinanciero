@@ -20,6 +20,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from .norma43 import leer_norma43
+from ....core.errores import ErrorApp
 
 
 def _f(v):
@@ -43,16 +44,16 @@ def listar_bancos(conn, solo_activos=False):
 def guardar_banco(conn, datos: dict, id_=None):
     cuenta = str(datos.get("cuenta_572") or "").strip()
     if not (cuenta.isdigit() and cuenta.startswith("572")):
-        raise ValueError("La cuenta contable debe ser numérica y empezar por 572")
+        raise ErrorApp("CC-BAN-005")
     nombre = (datos.get("nombre") or "").strip()
     if not nombre:
-        raise ValueError("El banco necesita un nombre")
+        raise ErrorApp("CC-BAN-006")
     v = {"nombre": nombre[:150], "cuenta_572": cuenta, "iban": (datos.get("iban") or "").replace(" ", "")[:34],
          "entidad": (datos.get("entidad") or "").strip()[:150], "activo": bool(datos.get("activo", True))}
     existe = conn.execute(text("SELECT id FROM cc_bancos WHERE lower(nombre) = lower(:n) AND id IS DISTINCT FROM :id"),
                           {"n": nombre, "id": id_}).first()
     if existe:
-        raise ValueError("Ya existe un banco con ese nombre")
+        raise ErrorApp("CC-BAN-007")
     if id_ is None:
         return conn.execute(text("""
             INSERT INTO cc_bancos (nombre, cuenta_572, iban, entidad, activo)
@@ -60,21 +61,21 @@ def guardar_banco(conn, datos: dict, id_=None):
     if not conn.execute(text("""
         UPDATE cc_bancos SET nombre = :nombre, cuenta_572 = :cuenta_572, iban = :iban, entidad = :entidad,
                activo = :activo WHERE id = :id"""), v | {"id": id_}).rowcount:
-        raise ValueError("El banco no existe")
+        raise ErrorApp("CC-BAN-008")
     return id_
 
 
 def borrar_banco(conn, id_):
     n = conn.execute(text("SELECT COUNT(*) FROM cc_extractos WHERE banco_id = :b"), {"b": id_}).scalar()
     if n:
-        raise ValueError(f"El banco tiene {n} movimientos de extracto; desactívalo en lugar de borrarlo")
+        raise ErrorApp("CC-BAN-009", n=n)
     conn.execute(text("DELETE FROM cc_bancos WHERE id = :b"), {"b": id_})
 
 
 def _banco(conn, banco_id):
     b = conn.execute(text("SELECT * FROM cc_bancos WHERE id = :b"), {"b": banco_id}).mappings().first()
     if not b:
-        raise ValueError("Banco no encontrado")
+        raise ErrorApp("CC-BAN-010")
     return b
 
 
@@ -85,10 +86,10 @@ def leer_config(conn, banco_id):
 
 def guardar_config(conn, banco_id, dias_nivel2: int, tol_nivel8: float, tol_nivel9: float):
     if not (0 <= dias_nivel2 <= 30):
-        raise ValueError("Los días del nivel 2 deben estar entre 0 y 30")
+        raise ErrorApp("CC-BAN-011")
     for t in (tol_nivel8, tol_nivel9):
         if not (0 <= t <= 1000):
-            raise ValueError("Las tolerancias deben estar entre 0 y 1.000 €")
+            raise ErrorApp("CC-BAN-012")
     cuenta = _banco(conn, banco_id)["cuenta_572"]
     conn.execute(text("""
         INSERT INTO cc_banco_config (cuenta_572, level_2_days) VALUES (:c, :d)
@@ -116,7 +117,7 @@ def importar_norma43(conn, contenido: bytes, banco_id: int, ejercicio: int, indi
         datos = None
         if indice_cuenta is not None:
             if not 0 <= indice_cuenta < len(cuentas):
-                raise ValueError("Cuenta del fichero no válida")
+                raise ErrorApp("CC-BAN-013")
             datos = cuentas[indice_cuenta]
         else:
             for c in cuentas:  # criterio del original
@@ -127,7 +128,7 @@ def importar_norma43(conn, contenido: bytes, banco_id: int, ejercicio: int, indi
             return {"elegir_cuenta": [{"indice": i, "cuenta": c["cuenta"], "iban": c["iban"],
                                        "movimientos": len(c["movimientos"])} for i, c in enumerate(cuentas)]}
     if not datos["movimientos"]:
-        raise ValueError("El fichero no tiene movimientos")
+        raise ErrorApp("CC-BAN-014")
 
     conservados = Counter(_clave(r.fecha_operacion, r.fecha_valor, r.importe, r.concepto)
                           for r in conn.execute(text("""
@@ -168,7 +169,7 @@ def _leer_tabla(nombre: str, contenido: bytes) -> pd.DataFrame:
                     return df
             except Exception:
                 continue
-    raise ValueError("No se pudo leer el fichero (separador o codificación no reconocidos)")
+    raise ErrorApp("CC-BAN-015")
 
 
 def columnas_tabla(nombre: str, contenido: bytes):
@@ -183,7 +184,7 @@ def importar_tabla(conn, nombre: str, contenido: bytes, banco_id: int, ejercicio
     df = _leer_tabla(nombre, contenido)
     for req in ("fecha", "concepto", "importe"):
         if not mapeo.get(req) or mapeo[req] not in df.columns:
-            raise ValueError(f"Falta la columna de {req} en el mapeo")
+            raise ErrorApp("CC-BAN-016", campo=req)
     out = pd.DataFrame()
     out["fop"] = pd.to_datetime(df[mapeo["fecha"]], dayfirst=True, errors="coerce")
     out["con"] = df[mapeo["concepto"]].astype(str)
@@ -249,7 +250,7 @@ def _cargar_seleccion(conn, banco_id, ejercicio, ids_banco, ids_diario):
         WHERE id = ANY(:ids) AND cuenta = :c AND ejercicio = :ej AND NOT reconciled"""),
         {"ids": ids_diario, "c": cuenta, "ej": ejercicio}).mappings().all()
     if len(b) != len(set(ids_banco)) or len(d) != len(set(ids_diario)):
-        raise ValueError("Algún movimiento ya no está pendiente (o no es de este banco y ejercicio); actualiza la lista")
+        raise ErrorApp("CC-BAN-017")
     return b, d
 
 
@@ -270,7 +271,7 @@ def conciliar_1a1(conn, banco_id, ejercicio, id_banco: int, id_diario: int):
 def conciliar_nn(conn, banco_id, ejercicio, ids_banco: list[int], ids_diario: list[int]):
     """N movimientos contra N apuntes (suma banco = suma diario; la pantalla avisa si no)."""
     if not ids_banco or not ids_diario:
-        raise ValueError("Marca al menos un movimiento del banco y un apunte del diario")
+        raise ErrorApp("CC-BAN-018")
     b, d = _cargar_seleccion(conn, banco_id, ejercicio, ids_banco, ids_diario)
     dif = abs(sum(x["importe"] for x in b) - sum(x["neto"] for x in d))
     gid = f"MANUAL_NN_{int(time.time())}_{min(ids_banco)}"

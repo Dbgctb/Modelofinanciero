@@ -214,6 +214,14 @@ autorización del usuario.
 - Roles: `admin`, `gestor`, `lector`. Los endpoints sensibles usan `require_role(["admin"])`.
 - Rate limiting con `slowapi` en endpoints de login y recalcular.
 - Los errores internos nunca exponen detalle al cliente en producción.
+- **Catálogo de errores** (`app/core/errores.py`, documentado en `docs/CATALOGO_ERRORES.md`): todo error que ve el
+  usuario lleva código y sale como `"[CODIGO] mensaje"`. Nunca `raise ValueError("texto")` ni
+  `HTTPException(..., detail="texto")`:
+  - servicios → `raise ErrorApp("CC-IMP-003", faltan=...)` (hereda de `ValueError`, compatible con los `except ValueError`);
+  - routers → `raise error_http("USR-003")` (estado HTTP del catálogo);
+  - al reenviar un `ValueError` capturado → `detail=detalle_usuario(e)` (si no es del catálogo, lo registra y muestra `GEN-004`).
+  - Error nuevo: entrada en `_ENTRADAS` y `venv\Scripts\python scripts\catalogo_errores.py --escribir`. El mismo script
+    sin argumentos comprueba códigos, parámetros, textos literales pendientes y que el documento está al día.
 
 ### Frontend
 - El cliente axios está en `api/client.ts` — maneja refresh token y redirección a `/login` en 401.

@@ -7,6 +7,7 @@ from sqlalchemy import text
 from .controles import CONTROLES, ejecutar_controles
 from .motor import ejecutar_ejercicio
 from .reglas import REGLAS
+from ...core.errores import ErrorApp
 
 
 def tarea_punteo(progreso, engine, ejercicios, filtro_cuentas, controles):
@@ -14,7 +15,7 @@ def tarea_punteo(progreso, engine, ejercicios, filtro_cuentas, controles):
     las reglas finales (CROSS_YEAR, L, P, Q, R, T) solo tras el último."""
     ejercicios = sorted(set(int(e) for e in ejercicios))
     if not ejercicios:
-        raise ValueError("Elige al menos un ejercicio.")
+        raise ErrorApp("CC-PUN-001")
     resultados = []
     for i, ej in enumerate(ejercicios):
         def prog(e, regla, n, _i=i):
@@ -47,7 +48,7 @@ def listar_reglas(conn):
 
 def actualizar_regla(conn, codigo, active=None, tolerance_amount=None, description=None):
     if codigo not in REGLAS:
-        raise ValueError(f"Regla desconocida: {codigo}")
+        raise ErrorApp("CC-PUN-002", codigo=codigo)
     sets, params = [], {"c": codigo}
     if active is not None:
         sets.append("active = :a")
@@ -55,7 +56,7 @@ def actualizar_regla(conn, codigo, active=None, tolerance_amount=None, descripti
     if tolerance_amount is not None:
         t = Decimal(str(tolerance_amount))
         if t < 0 or t > 10000:
-            raise ValueError("La tolerancia debe estar entre 0 y 10.000 €")
+            raise ErrorApp("CC-PUN-003")
         sets.append("tolerance_amount = :t")
         params["t"] = t
     if description is not None:
@@ -78,18 +79,18 @@ def listar_cuentas_control(conn):
 def guardar_cuenta_control(conn, datos: dict, id_: int | None = None):
     tipo = datos.get("tipo")
     if tipo not in CONTROLES:
-        raise ValueError("Tipo de control no válido (C, D, K o L)")
+        raise ErrorApp("CC-PUN-004")
     cuenta = str(datos.get("cuenta") or "").strip()
     if not cuenta.isdigit():
-        raise ValueError("La cuenta debe ser numérica (se usa como prefijo; en D, exacta)")
+        raise ErrorApp("CC-PUN-005")
     valores = {"tipo": tipo, "name": (datos.get("name") or "").strip()[:150], "cuenta": cuenta,
                "min_mov": datos.get("min_mov"), "max_mov": datos.get("max_mov"),
                "tolerance_pct": datos.get("tolerance_pct"), "active": bool(datos.get("active", True))}
     if tipo == "C" and (valores["min_mov"] is None or valores["max_mov"] is None
                         or valores["min_mov"] > valores["max_mov"]):
-        raise ValueError("El control C necesita mínimo y máximo de movimientos (mínimo ≤ máximo)")
+        raise ErrorApp("CC-PUN-006")
     if tipo == "D" and valores["tolerance_pct"] is None:
-        raise ValueError("El control D necesita una tolerancia en %")
+        raise ErrorApp("CC-PUN-007")
     if id_ is None:
         return conn.execute(text("""
             INSERT INTO cc_cuentas_control (tipo, name, cuenta, min_mov, max_mov, tolerance_pct, active)
@@ -101,7 +102,7 @@ def guardar_cuenta_control(conn, datos: dict, id_: int | None = None):
         WHERE id = :id
     """), valores | {"id": id_}).rowcount
     if not n:
-        raise ValueError("La cuenta de control no existe")
+        raise ErrorApp("CC-PUN-008")
     return id_
 
 

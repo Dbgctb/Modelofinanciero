@@ -26,6 +26,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from sqlalchemy import text
+from ....core.errores import ErrorApp
 
 log = logging.getLogger(__name__)
 
@@ -154,7 +155,7 @@ def conciliar(engine, ejercicio: int, banco_id: int, progreso=lambda *a, **k: No
         banco = conn.execute(text("SELECT id, nombre, cuenta_572 FROM cc_bancos WHERE id = :b"),
                              {"b": banco_id}).mappings().first()
         if not banco or not banco["cuenta_572"]:
-            raise ValueError("Banco no encontrado o sin cuenta 572")
+            raise ErrorApp("CC-BAN-001")
         cuenta = banco["cuenta_572"]
         cfg = configuracion(conn, cuenta)
         run_id = conn.execute(text("""

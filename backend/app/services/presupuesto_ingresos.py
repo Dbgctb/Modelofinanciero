@@ -27,6 +27,7 @@ from ..models.recibo import Recibo
 from ..models.diario import DiarioApunte, TipoCuenta, EstadoApunte
 from ..models.carga import CargaContable, TipoCarga, EstadoCarga
 from ..models.mercado import TasaMercadoRef, TipoTasaMercado
+from ..core.errores import ErrorApp
 
 log = logging.getLogger(__name__)
 
@@ -749,7 +750,7 @@ def importar_lineas_ingresos_excel(db: Session, presupuesto: Presupuesto, conten
         if not compania_col: missing.append('Compañía')
         if not ramo_col:     missing.append('Ramo')
         if not linea_col:    missing.append('Línea')
-        raise ValueError(f"Columnas requeridas no encontradas: {', '.join(missing)}")
+        raise ErrorApp("PRE-017", faltan=", ".join(missing))
 
     def _f(val) -> float:
         try:

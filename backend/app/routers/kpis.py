@@ -2,7 +2,7 @@
 Router KPIs — RF-KPI-01 a RF-KPI-04.
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from ..core.database import get_db
 from ..core.dependencies import get_current_user, require_gestor_or_admin
@@ -12,6 +12,7 @@ from ..models.kpi import UmbralKPI, ResultadoKPI, SemaforoColor
 from ..services.kpis import calcular_kpis, alertas_gestion
 from pydantic import BaseModel
 from decimal import Decimal
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/kpis", tags=["kpis"])
 
@@ -34,7 +35,7 @@ class UmbralOut(BaseModel):
 def _get_presupuesto(presupuesto_id: str, db: Session) -> Presupuesto:
     p = db.query(Presupuesto).filter(Presupuesto.id == presupuesto_id).first()
     if not p:
-        raise HTTPException(404, "Presupuesto no encontrado")
+        raise error_http("PRE-001")
     return p
 
 
