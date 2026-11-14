@@ -198,6 +198,19 @@ migrado de la fase 1, salvo que el usuario decida quedarse con el resultado del 
 | Interfaz muy grande (8.076 líneas) | Por fases, una pantalla cada vez, y probada |
 | Pérdida del trabajo manual | Ids conservados; el SQLite original nunca se escribe; recuentos en la fase 1 |
 
+### Resultado de la fase 1 (2026-11-14)
+`backend/scripts/migrar_cuadre_sqlite.py` copió las 11 tablas en una transacción (~70 s) y las comparó **fila a fila,
+campo a campo**: 1.127.326 filas idénticas, y los 642 grupos ejercicio × cuenta (3 dígitos) × regla con los mismos
+recuentos y sumas. Punteos manuales y del banco presentes: MANUAL_H 1.562, MANUAL_NN 2, NIVEL_1/2/3/7/8/9 283.
+
+Hallazgos que vienen del original (se han copiado tal cual, no son efecto de la migración):
+- **2017 no cuadra:** debe 7.281.010,04 frente a haber 7.282.524,32 (−1.514,28). El resto de ejercicios cuadra.
+- **Referencias a apuntes que ya no existen** (reimportaciones antiguas que recrearon los apuntes con ids nuevos):
+  4 de los 6 emparejamientos del Diagnóstico H (`cobro_id`) y 1.534 de los 5.284 ids de las incidencias K.
+  Se revisan en la fase 5 (Diagnóstico H) y al volver a ejecutar los controles (fase 3), que regeneran las incidencias.
+
+Para repetir la migración: `scripts/migrar_cuadre_sqlite.py RUTA_SQLITE --reemplazar`; solo comprobar: `--solo-verificar`.
+
 ### Vuelta atrás
 - El programa original y su SQLite no se modifican en ningún momento (solo lectura).
 - Para deshacer la integración basta con borrar la rama y las tablas `cc_*` (bajar la migración
@@ -211,7 +224,7 @@ migrado de la fase 1, salvo que el usuario decida quedarse con el resultado del 
 |---|---|---|---|
 | Análisis y plan | Hecho | 2026-11-14 | — |
 | 0 Esqueleto | Hecho | 2026-11-14 | (este commit) |
-| 1 Migración de datos | Pendiente | | |
+| 1 Migración de datos | Hecho | 2026-11-14 | (este commit) |
 | 2 Motor de punteo | Pendiente | | |
 | 3 Pantallas de punteo | Pendiente | | |
 | 4 Conciliación bancaria | Pendiente | | |
