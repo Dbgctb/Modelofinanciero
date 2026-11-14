@@ -127,7 +127,8 @@ backend/app/services/cierres/
     normalizador.py      extract_recibo, normalize_concepto (copia fiel)
     importador.py        diario completo e incremental (nuevos y huérfanos)
     motor.py             orquesta las reglas y la ejecución multi-ejercicio, en segundo plano
-    reglas/              una regla por archivo, SQL parametrizado en PostgreSQL
+    reglas/              reglas_sql.py (A, B, I, O, S, CROSS_YEAR, L, P, R, T), reglas_python.py
+                         (C, E, H, K, K2, Q, RETRO, RETROCESO, V), _comun.py y el registro
     controles.py         controles C, D, K, L
     manual.py            punteo manual, desconciliar, Diagnóstico H
     diferencias.py       asientos de diferencias
@@ -174,6 +175,34 @@ El merge a `main` requiere autorización explícita.
 | 4 | Conciliación bancaria | Norma 43 y Excel, niveles 1 a 9, pendientes, manual 1:1 y N:N, auto-crear asientos, informe | Paridad con el programa actual sobre los extractos de 2025 |
 | 5 | Herramientas | Diagnóstico H, Asientos de diferencias, Exportar (Excel del punteo) | Excels comparados con los del programa actual |
 | 6 | Cierre | `CLAUDE.md` del proyecto, revisión completa y validación del usuario | El usuario valida en la app; la carpeta original se archiva (no se borra) cuando él lo confirme |
+
+### Criterios de traducción del motor (fase 2)
+- `LIKE` de SQLite no distingue mayúsculas: los patrones sobre conceptos usan `ILIKE`.
+- SQLite ordena texto byte a byte; la base usa intercalación Spanish_Spain (ignora `|`, `-`, espacios).
+  Donde el orden decide qué apunte se consume primero: `COLLATE "C"` y desempate por `id`.
+- Reglas en Python: `neto` como float8, igual que REAL, para que sumas, redondeos y búsquedas den lo mismo.
+  Reglas SQL: sumas en NUMERIC exacto.
+- `recon_group_id` con el mismo formato (incluido `hash()` de tuplas de enteros, determinista).
+- Cada regla en su transacción; si falla se deshace esa regla, se sigue (como el original) y la ejecución
+  queda "con_errores" con el detalle.
+- Peculiaridades del original que se mantienen: el filtro de cuentas de la pantalla solo afecta a la regla A;
+  la regla R no usa tolerancia (exige saldo 0). Se corrige: CROSS_YEAR leía su tolerancia con un código
+  inexistente y usaba siempre 0,01 (hoy configurada también a 0,01, sin efecto).
+- Herramienta: `backend/scripts/paridad_punteo.py`.
+
+### Resultado de la prueba de paridad del punteo (2026-11-14)
+Los dos motores sobre los mismos datos (todo despunteado salvo MANUAL_* y NIVEL_*), 9 ejercicios:
+- Normalizador: idéntico en los 1.044.017 conceptos.
+- Punteados: original 866.522, nuevo 866.731. Ningún grupo con composición distinta dentro de la misma regla.
+- Diferencias, todas por la suma en coma flotante del original:
+  - RULE_B (tolerancia 0,00): 7.450 apuntes cuyos grupos suman exactamente 0 pero el original veía
+    ±1e-15 y los rechazaba; después los cogían Q o R, o se quedaban sin puntear (210). El nuevo los puntea con B.
+  - RULE_C (tolerancia 0,00): igual, 2.219 apuntes (54 grupos) que el original dejaba a la regla L.
+  - 81 apuntes de S, Q y CROSS_YEAR, todos en cuentas afectadas por lo anterior (efecto arrastre).
+- Tiempo: original ~190 s, nuevo ~135–170 s.
+- **Decisión del usuario (2026-11-14): se mantienen las sumas exactas** (opción a).
+- Pendiente de vigilar: RETRO y RETROCESO (tolerancia 0,00) siguen comparando en coma flotante como el
+  original; hoy coinciden exactamente, pero con otros datos podrían tener el mismo problema.
 
 ### Prueba de paridad (fase 2 y fase 4)
 El estado guardado en el SQLite se generó con versiones anteriores de las reglas. Por eso se compara
@@ -225,7 +254,7 @@ Para repetir la migración: `scripts/migrar_cuadre_sqlite.py RUTA_SQLITE --reemp
 | Análisis y plan | Hecho | 2026-11-14 | — |
 | 0 Esqueleto | Hecho | 2026-11-14 | (este commit) |
 | 1 Migración de datos | Hecho | 2026-11-14 | (este commit) |
-| 2 Motor de punteo | Pendiente | | |
+| 2 Motor de punteo | Hecho (sumas exactas, decisión del usuario) | 2026-11-14 | (este commit) |
 | 3 Pantallas de punteo | Pendiente | | |
 | 4 Conciliación bancaria | Pendiente | | |
 | 5 Herramientas | Pendiente | | |
