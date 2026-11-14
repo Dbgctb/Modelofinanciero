@@ -228,6 +228,29 @@ Verificación (por la API, con el diario real `carga de datos/diario 2025.xlsx`)
 - Punteo manual, rechazo de repetido, bloque visible al momento, Excel de selección y de conciliados (3 hojas).
 - Al terminar, las tablas cc_* se restauraron con `migrar_cuadre_sqlite.py --reemplazar` (verificado idéntico).
 
+### Fase 4: conciliación bancaria (2026-11-14)
+Código: `services/cierres/banco/` (norma43.py, motor.py, servicio.py), `routers/cierres_banco.py`, pantalla
+`pages/cierres/ConciliacionBancaria.tsx` con 5 pestañas. Prueba: `backend/scripts/paridad_banco.py`.
+
+Paridad (todo lo conciliado por niveles deshecho en ambos lados, los dos bancos de 2025): **0 diferencias** en los
+1.232 movimientos y en los 13.263 apuntes 572 (776 movimientos conciliados en ambos). Lector Norma 43: idéntico al
+original en los 416 movimientos de un fichero generado con el extracto de "Antiguo banesto".
+
+Se mantiene del original: niveles 1, 2, 3, 7, 8 y 9 en ese orden, siempre todos; el nivel 3 usa ±5,00 € fijos; los
+niveles 1-3 no ponen grupo. Se descarta: el botón "Conciliar" genérico y los niveles 4, 5 y 6 (no existían),
+`bank_report_exporter.py` (sin uso).
+
+Cambios respecto al original:
+- Reimportar un Norma 43 conserva los movimientos conciliados (el original los borraba y dejaba apuntes punteados
+  contra movimientos inexistentes); sustituye solo los pendientes y no duplica los conciliados.
+- Desconciliar libera el grupo entero (en un N:N el original dejaba conciliados los demás movimientos).
+- "Auto-crear asiento" no creaba nada en el original: aquí es "Propuesta de asiento", solo consulta.
+- No se puede borrar un banco con movimientos (se desactiva).
+
+Verificado por la API: reimportación (236 conservados, 180 sustituidos), conciliación del banco 5 (539/816),
+1:1, N:N, rechazo de repetidos, desconciliar grupo, propuesta, Excel y alta/baja de bancos. Al terminar, cc_*
+restaurado con `migrar_cuadre_sqlite.py --reemplazar` (verificado idéntico).
+
 ### Prueba de paridad (fase 2 y fase 4)
 El estado guardado en el SQLite se generó con versiones anteriores de las reglas. Por eso se compara
 **código antiguo contra código nuevo sobre los mismos datos**, no contra el estado guardado:
@@ -280,6 +303,6 @@ Para repetir la migración: `scripts/migrar_cuadre_sqlite.py RUTA_SQLITE --reemp
 | 1 Migración de datos | Hecho | 2026-11-14 | (este commit) |
 | 2 Motor de punteo | Hecho (sumas exactas, decisión del usuario) | 2026-11-14 | (este commit) |
 | 3 Pantallas de punteo | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
-| 4 Conciliación bancaria | Pendiente | | |
+| 4 Conciliación bancaria | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
 | 5 Herramientas | Pendiente | | |
 | 6 Cierre | Pendiente | | |

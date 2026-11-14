@@ -38,6 +38,7 @@ import CierresImportar from './pages/cierres/ImportarDiario'
 import CierresPunteo from './pages/cierres/PunteoAutomatico'
 import CierresManual from './pages/cierres/PunteoManual'
 import CierresConciliados from './pages/cierres/VerConciliados'
+import CierresBanco from './pages/cierres/ConciliacionBancaria'
 
 // Ref global que AppErrorConfig rellena con el contexto de notificaciones antd
 let _notify: ((msg: string, type?: 'error' | 'warning' | 'info') => void) | null = null
@@ -139,7 +140,7 @@ export default function App() {
                 <Route path="cierres/recobros" element={<CierresEnPreparacion key="recobros" titulo="Recobros (Diagnóstico H)" descripcion="Recobros de comisiones sin cobro asociado: emparejamientos guardados, asignar cobro y Excel." fase="fase 5" />} />
                 <Route path="cierres/conciliados" element={<CierresConciliados />} />
                 <Route path="cierres/diferencias" element={<CierresEnPreparacion key="diferencias" titulo="Asientos de diferencias" descripcion="Carga, duplica o invierte asientos y genera la «Nueva carga de asientos»." fase="fase 5" />} />
-                <Route path="cierres/banco" element={<CierresEnPreparacion key="banco" titulo="Conciliación bancaria" descripcion="Extractos Norma 43 o Excel, conciliación por niveles, pendientes, manual y configuración de bancos." fase="fase 4" />} />
+                <Route path="cierres/banco" element={<CierresBanco />} />
                 <Route path="cierres/exportar" element={<CierresEnPreparacion key="exportar" titulo="Exportar" descripcion="Excel completo del punteo." fase="fase 5" />} />
 
                 {/* Módulo Analítico */}
