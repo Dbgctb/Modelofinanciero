@@ -592,7 +592,7 @@ def cliente_detalle(
             "numero_poliza": r.numero_poliza,
             "compania": r.compania,
             "ramo": r.ramo,
-            "ramo_norm": _normalizar_ramo(r.ramo or ''),
+            "ramo_norm": _normalizar_ramo(r.ramo or '', r.producto),
             "auxiliar": r.ente,
             "pr_total": float(r.pr_total or 0),
             "pr_neto": float(r.pr_neto or 0) if r.pr_neto is not None else None,
@@ -633,7 +633,7 @@ def cliente_detalle(
             "margen_pct": margen_pct,
             "n_recibos_vigentes": len(recibos_vigentes),
             "n_recibos_ejercicio": len(recibos_cliente),
-            "ramos_vigentes": list(set(_normalizar_ramo(r.ramo or '') for r in recibos_vigentes)),
+            "ramos_vigentes": list(set(_normalizar_ramo(r.ramo or '', r.producto) for r in recibos_vigentes)),
         },
         "recibos": [
             _fmt(r)

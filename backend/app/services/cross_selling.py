@@ -27,8 +27,10 @@ from .rentabilidad_cliente import calcular_rentabilidad_clientes
 
 log = logging.getLogger(__name__)
 
-# Ramos permitidos según tipo de cliente
-_RAMOS_FISICO   = {'AUTO', 'HOGAR', 'SALUD', 'VIDA', 'DECESOS', 'ACCIDENTES', 'RC', 'CIBER'}
+# Ramos permitidos según tipo de cliente.
+# A personas físicas no se les ofrece RC ni Ciber (decisión del usuario 2026-10-27): la
+# RC familiar ya viene en el seguro de hogar y Ciber es un producto de empresa.
+_RAMOS_FISICO   = {'AUTO', 'HOGAR', 'SALUD', 'VIDA', 'DECESOS', 'ACCIDENTES'}
 _RAMOS_JURIDICO = {'AUTO', 'MULTIRRIESGO', 'RC', 'CIBER', 'FLOTILLAS', 'BAJAS', 'ACCIDENTES', 'SALUD', 'VIDA'}
 
 # ── Matriz de afinidad (benchmarks mercado español de seguros) ───────────────────
@@ -119,15 +121,34 @@ def _limpiar_subramo(ramo: str) -> str:
     return re.sub(r'\s+', ' ', ramo.strip().upper())
 
 
-def _normalizar_ramo(ramo: str) -> str:
+def _producto_canonico(producto: str | None) -> str:
+    """'<D> HOGAR -> MULTIRRIESGOS (HOGAR)' → 'MULTIRRIESGOS (HOGAR)'."""
+    if not producto:
+        return ""
+    p = re.sub(r'^\s*<[^>]*>\s*', '', str(producto))
+    return re.sub(r'\s+', ' ', p.split('->')[-1].strip().upper())
+
+
+def _normalizar_ramo(ramo: str, producto: str | None = None) -> str:
     if not ramo:
         return "OTROS"
     r = ramo.strip().upper()
+    # El ramo "Multirriesgos" de los recibos agrupa hogar, comercios, comunidades y pymes;
+    # solo el producto los distingue. Sin esto, un particular con seguro de hogar se
+    # trataba como empresa (y se le ofrecía RC profesional y Ciber).
+    if 'MULTIRRIESGO' in r and producto:
+        p = _producto_canonico(producto)
+        if 'HOGAR' in p:
+            return 'HOGAR'
+        if 'COMUNIDAD' in p:
+            return 'COMUNIDAD'
+        return 'MULTIRRIESGO'
     if any(x in r for x in ['AUTO', 'VEHICULO', 'VEHÍCULO', 'COCHE', 'MOTO']):
         return 'AUTO'
     if any(x in r for x in ['HOGAR', 'COMUNIDAD', 'EDIFICIO', 'CONTE', 'INMUEBLE']):
         return 'HOGAR'
-    if any(x in r for x in ['SALUD', 'MÉDICO', 'MEDICO', 'SANITARIO']):
+    # 'SANITARI' cubre "Asistencia Sanitaria", el nombre del ramo de salud en los recibos
+    if any(x in r for x in ['SALUD', 'MÉDICO', 'MEDICO', 'SANITARI']):
         return 'SALUD'
     if any(x in r for x in ['VIDA', 'FALLECIMIENTO', 'AHORRO', 'PENSIÓN', 'PENSION']):
         return 'VIDA'
@@ -146,6 +167,33 @@ def _normalizar_ramo(ramo: str) -> str:
     if any(x in r for x in ['BAJA', 'COLECTIVO']):
         return 'BAJAS'
     return r
+
+
+# Tomador que por su nombre es una persona jurídica o una comunidad. Se usa solo cuando
+# el cliente no tiene ficha en la tabla clientes (si la tiene, manda su tipo).
+_RE_JURIDICO = re.compile(
+    # Forma societaria al final: S.L., SLU, S.A., C.B., S.C., S.C.L., S.C.M., S.C.P...
+    # (también truncada a "S." y con basura final como "C.B. .")
+    r"([\s,.](S\.?\s?L\.?\s?(U\.?|L\.?|P\.?|N\.?\s?E\.?)?|S\.?\s?A\.?\s?(U\.?)?|C\.?\s?B\.?|S\.?\s?C\.?\s?[LMPA]?\.?|S\.)[\s.]*$)"
+    # Comunidades de propietarios: "C.P. ALCAZABA 3", "C.P.PARQUE", "CC.PP.", "CDAD ..."
+    r"|^C\.\s?P\.|^C\.?\s?P\s|^CC\.?\s?PP\b|\bCOMUNIDAD\b|\bCDAD\b|\bMANCOMUNIDAD\b|^MANCO\.|^URB\.\s"
+    r"|\bRESIDENCIAL\b|\bEDIFICIO\b|\bENTIDAD\b|\bHEREDEROS\b|\bESCUELA\b"
+    # "PEÑA" sola es también apellido: solo peñas como asociación
+    r"|\bPE[ÑN]A\s+(TAURINA|DEPORTIVA|CULTURAL|RECREATIVA|FLAMENCA|MADRIDISTA|ATL[EÉ]TICA|B[EÉ]TICA|BARCELONISTA|CICLISTA)\b"
+    r"|S\.?\s?COOP|\bSOCIEDAD\b|\bCOOPERATIVA\b|\bLIMITADA\b|\bAN[OÓ]NIMA\b"
+    r"|\bASOCIACI[OÓ]N\b|\bAGRUPACI[OÓ]N\b|\bFUNDACI[OÓ]N\b|\bAMPA\b|\bCLUB\b|^C\.\s?D\.\s"
+    r"|\bAYUNTAMIENTO\b|\bPARROQUIA\b|\bCOLEGIO\b|\bAPARCAMIENTOS?\b|\bGARAJES?\b"
+    r"|\bADMINISTRADORES\b|\bGROUP\b|\bGRUPO\b"
+)
+
+
+def _tipo_cliente(c_db, tomador_norm: str, ramos_vigentes: set) -> TipoCliente:
+    if c_db is not None:
+        return c_db.tipo
+    # El tomador de un multirriesgo de comunidades es la propia comunidad
+    if _RE_JURIDICO.search(tomador_norm) or 'COMUNIDAD' in ramos_vigentes:
+        return TipoCliente.JURIDICO
+    return TipoCliente.FISICO
 
 
 def _antiguedad_anos(fecha_alta: Optional[date], min_desde: Optional[date]) -> float:
@@ -274,13 +322,26 @@ def calcular_ramo_stats(db: Session, ejercicio: int) -> list[dict]:
             continue
         if not r.hasta or r.hasta < fecha_ref:
             continue
-        sub = _limpiar_subramo(r.subramo) if r.subramo else _limpiar_subramo(r.ramo)
-        cat = _normalizar_ramo(r.ramo)           # categoría normalizada para lookup
+        cat = _normalizar_ramo(r.ramo, r.producto)   # categoría normalizada para lookup
+        if r.subramo:
+            sub = _limpiar_subramo(r.subramo)
+        elif cat in ('HOGAR', 'COMUNIDAD', 'MULTIRRIESGO') and 'MULTIRRIESGO' in r.ramo.upper():
+            # Sin subramo, "Multirriesgos" mezclaría categorías: se separa por producto
+            sub = _producto_canonico(r.producto) or _limpiar_subramo(r.ramo)
+        else:
+            sub = _limpiar_subramo(r.ramo)
         _cat_subramo[sub] = cat
         t = _norm_nombre(r.tomador)
         _prima_cli[sub][t] += float(r.pr_total)
         if r.liqui is not None:
             _liqui_cli[sub][t] += float(r.liqui)
+
+    # Borra los sub-ramos del ejercicio que ya no salen (p. ej. el antiguo "MULTIRRIESGOS"
+    # único, hoy separado por producto), para que no contaminen las medias por categoría.
+    db.query(RamoStatsEjercicio).filter(
+        RamoStatsEjercicio.ejercicio == ejercicio,
+        RamoStatsEjercicio.ramo.notin_(list(_prima_cli.keys()) or ['']),
+    ).delete(synchronize_session=False)
 
     resultado = []
     for sub, clientes in _prima_cli.items():
@@ -389,7 +450,7 @@ def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
         for r in recibos_act:
             if not r.ramo or not r.pr_total or float(r.pr_total) <= 0 or not r.tomador:
                 continue
-            rn = _normalizar_ramo(r.ramo)
+            rn = _normalizar_ramo(r.ramo, r.producto)
             t = _norm_nombre(r.tomador)
             _ramo_prima_cli[rn][t] += float(r.pr_total)
             if r.liqui is not None:
@@ -444,7 +505,7 @@ def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
         if not r.tomador or _es_anulado(r.estado):
             continue
         t = _norm_nombre(r.tomador)
-        ramo_n = _normalizar_ramo(r.ramo or '')
+        ramo_n = _normalizar_ramo(r.ramo or '', r.producto)
         p = portfolios[t]
         p['ramos'].add(ramo_n)
         p['prima_total'] += float(r.pr_total or 0)
@@ -480,7 +541,7 @@ def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
             continue
         t = _norm_nombre(r.tomador)
         pa = portfolios_ant[t]
-        pa['ramos'].add(_normalizar_ramo(r.ramo or ''))
+        pa['ramos'].add(_normalizar_ramo(r.ramo or '', r.producto))
         pa['prima_total'] += float(r.pr_total or 0)
         if r.numero_poliza:
             cur = pa['polizas_prima'].get(r.numero_poliza, 0.0)
@@ -503,7 +564,7 @@ def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
     compradores_por_ramo: dict[str, list] = defaultdict(list)
     for t, port in portfolios.items():
         c_db = clientes_db.get(t)
-        tipo = c_db.tipo if c_db else TipoCliente.FISICO
+        tipo = _tipo_cliente(c_db, t, port['ramos_vigentes'])
         ant = _antiguedad_anos(c_db.fecha_alta if c_db else None, port['min_desde'])
         for ramo in port['ramos_vigentes']:
             compradores_por_ramo[ramo].append({
@@ -534,7 +595,7 @@ def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
 
     for tomador_norm, port in portfolios.items():
         c_db = clientes_db.get(tomador_norm)
-        tipo_cli = c_db.tipo if c_db else TipoCliente.FISICO
+        tipo_cli = _tipo_cliente(c_db, tomador_norm, port['ramos_vigentes'])
         fecha_alta_cli = c_db.fecha_alta if c_db else None
         cliente_id = c_db.id if c_db else None
 

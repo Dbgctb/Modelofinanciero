@@ -17,6 +17,7 @@ const RAMO_COLORS: Record<string, string> = {
   AUTO: 'blue', HOGAR: 'green', SALUD: 'red', VIDA: 'purple',
   DECESOS: 'default', ACCIDENTES: 'orange', RC: 'cyan',
   MULTIRRIESGO: 'geekblue', CIBER: 'magenta', FLOTILLAS: 'volcano', BAJAS: 'gold',
+  COMUNIDAD: 'lime',
 }
 
 const SENAL_CONFIG: Record<string, { color: string; label: string; icon: React.ReactNode }> = {

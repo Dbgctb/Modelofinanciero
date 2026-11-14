@@ -21,6 +21,7 @@ const RAMO_COLORS: Record<string, string> = {
   AUTO: 'blue', HOGAR: 'green', SALUD: 'red', VIDA: 'purple',
   DECESOS: 'default', ACCIDENTES: 'orange', RC: 'cyan',
   MULTIRRIESGO: 'geekblue', CIBER: 'magenta', FLOTILLAS: 'volcano', BAJAS: 'gold',
+  COMUNIDAD: 'lime',
 }
 
 const RAMO_ICONS: Record<string, React.ReactNode> = {
