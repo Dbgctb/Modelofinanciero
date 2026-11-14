@@ -204,6 +204,30 @@ Los dos motores sobre los mismos datos (todo despunteado salvo MANUAL_* y NIVEL_
 - Pendiente de vigilar: RETRO y RETROCESO (tolerancia 0,00) siguen comparando en coma flotante como el
   original; hoy coinciden exactamente, pero con otros datos podrían tener el mismo problema.
 
+### Fase 3: decisiones y verificación (2026-11-14)
+Decisiones del usuario:
+- El filtro de cuentas del punteo automático se aplica a **todas** las reglas (el original solo a la A).
+  Todos los grupos de todas las reglas son de una sola cuenta, así que filtrar al puntear no altera ningún grupo.
+- Los controles respetan las casillas y cada ejecución **sustituye** las incidencias de ese control y ejercicio
+  (el original ejecutaba siempre los cuatro y las acumulaba: en 2025, 7.488 filas C que eran 72 repetidas 104 veces).
+
+Correcciones respecto al original:
+- Control L: comparaba la cuenta configurada ("430") con igualdad exacta y nunca encontraba nada; ahora es prefijo
+  (en 2025 detecta 894 anulaciones sin emisión previa en 430*).
+- Importación completa: borrado e inserción en una sola transacción.
+- Punteo manual: rechaza apuntes ya punteados; el grupo incluye el id menor para que dos punteos en el mismo
+  segundo no se mezclen.
+- Filtro de cuenta en búsquedas: menos de 10 cifras sin * = prefijo (en el original "43" no encontraba nada).
+- Se descartan los botones "Guardar cambios" y "Limpiar caché" (propios de SQLite).
+
+Verificación (por la API, con el diario real `carga de datos/diario 2025.xlsx`):
+- Incremental con el mismo fichero: 138.401 sin cambios, 0 nuevos, 0 huérfanos, punteo intacto (21 s).
+- Completa: 138.401 importados, idénticos campo a campo a los del original (30 s).
+- Punteo 2025 + controles por la API: 27 s, sin errores; filtro malicioso rechazado (400); segunda tarea simultánea
+  rechazada (409).
+- Punteo manual, rechazo de repetido, bloque visible al momento, Excel de selección y de conciliados (3 hojas).
+- Al terminar, las tablas cc_* se restauraron con `migrar_cuadre_sqlite.py --reemplazar` (verificado idéntico).
+
 ### Prueba de paridad (fase 2 y fase 4)
 El estado guardado en el SQLite se generó con versiones anteriores de las reglas. Por eso se compara
 **código antiguo contra código nuevo sobre los mismos datos**, no contra el estado guardado:
@@ -255,7 +279,7 @@ Para repetir la migración: `scripts/migrar_cuadre_sqlite.py RUTA_SQLITE --reemp
 | 0 Esqueleto | Hecho | 2026-11-14 | (este commit) |
 | 1 Migración de datos | Hecho | 2026-11-14 | (este commit) |
 | 2 Motor de punteo | Hecho (sumas exactas, decisión del usuario) | 2026-11-14 | (este commit) |
-| 3 Pantallas de punteo | Pendiente | | |
+| 3 Pantallas de punteo | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
 | 4 Conciliación bancaria | Pendiente | | |
 | 5 Herramientas | Pendiente | | |
 | 6 Cierre | Pendiente | | |

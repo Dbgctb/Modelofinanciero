@@ -15,7 +15,7 @@ from itertools import combinations
 
 from sqlalchemy import text
 
-from ._comun import SET_PUNTEO, marcar
+from ._comun import SET_PUNTEO, filtro_cuentas_sql, marcar
 
 
 def _filas(conn, sql, **params):
@@ -26,7 +26,7 @@ def _filas(conn, sql, **params):
 # Suma en NUMERIC exacto (no float): con tolerancia 0,00 el ruido de coma flotante
 # rechazaba grupos que cuadran al céntimo (prueba de paridad, 2026-11-14).
 
-def regla_c(conn, ejercicio, run_id, tol, **_):
+def regla_c(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     grupos = _filas(conn, """
         SELECT cuenta, fecha, array_agg(id) AS ids, SUM(neto) AS neto_liquida
         FROM cc_apuntes
@@ -62,12 +62,12 @@ def regla_c(conn, ejercicio, run_id, tol, **_):
         gid = f"C|{g['cuenta']}|{g['fecha'].isoformat()}"
         for lid in list(g["ids"]) + [r["id"] for r in lineas]:
             pares.append((gid, lid))
-    return marcar(conn, "RULE_C", pares, run_id)
+    return marcar(conn, "RULE_C", pares, run_id, filtro_cuentas=filtro_cuentas)
 
 
 # ── RULE_E — pares de la misma cuenta+recibo con fechas a 1 día ───────────────
 
-def regla_e(conn, ejercicio, run_id, tol, **_):
+def regla_e(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     candidatos = _filas(conn, """
         SELECT cuenta, recibo_norm,
                array_agg(id ORDER BY id) AS ids,
@@ -87,11 +87,12 @@ def regla_e(conn, ejercicio, run_id, tol, **_):
             ids.extend(c["ids"])
     if not ids:
         return 0
+    fc, fc_params = filtro_cuentas_sql(filtro_cuentas)
     res = conn.execute(text(f"""
         UPDATE cc_apuntes
         SET {SET_PUNTEO}, recon_group_id = 'E|' || cuenta || '|' || recibo_norm
-        WHERE id = ANY(:ids) AND NOT reconciled
-    """), {"regla": "RULE_E", "run_id": run_id, "ids": ids})
+        WHERE id = ANY(:ids) AND NOT reconciled {fc}
+    """), {"regla": "RULE_E", "run_id": run_id, "ids": ids, **fc_params})
     return res.rowcount or 0
 
 
@@ -106,7 +107,7 @@ def _buscar_combinacion(candidatos, objetivo, tolerancia=1e-5):
     return None
 
 
-def regla_h(conn, ejercicio, run_id, tol, **_):
+def regla_h(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     recobros = _filas(conn, """
         SELECT id, cuenta, neto::float8 AS neto, asiento_key, concepto_norm
         FROM cc_apuntes
@@ -235,7 +236,7 @@ def regla_h(conn, ejercicio, run_id, tol, **_):
             usados_por_asiento[ak].add(c["id"])
         gid = f"H|{ak}|{cuenta}|{abs(hash(tuple(sorted(all_ids)))) % 100000}"
         pares.extend((gid, lid) for lid in all_ids)
-    return marcar(conn, "RULE_H", pares, run_id)
+    return marcar(conn, "RULE_H", pares, run_id, filtro_cuentas=filtro_cuentas)
 
 
 # ── RULE_K / RULE_K2 — emparejamiento 1:1 por cuenta+recibo ──────────────────
@@ -286,7 +287,7 @@ def _clasificar_k(regs):
     return tipos
 
 
-def _regla_k_comun(conn, ejercicio, run_id, tol, regla, filtro_cuenta, gid_fn, gid2_fn):
+def _regla_k_comun(conn, ejercicio, run_id, tol, regla, filtro_cuenta, gid_fn, gid2_fn, filtro_cuentas=None):
     registros = _filas(conn, f"""
         SELECT id, cuenta, recibo_norm, concepto_norm, neto::float8 AS neto, fecha
         FROM cc_apuntes
@@ -322,32 +323,34 @@ def _regla_k_comun(conn, ejercicio, run_id, tol, regla, filtro_cuenta, gid_fn, g
                 a, b = pos[i]["id"], neg[j]["id"]
                 gid = gid2_fn(cuenta, recibo, a, b)
                 pares += [(gid, a), (gid, b)]
-    return marcar(conn, regla, pares, run_id)
+    return marcar(conn, regla, pares, run_id, filtro_cuentas=filtro_cuentas)
 
 
-def regla_k(conn, ejercicio, run_id, tol, **_):
+def regla_k(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     """430*/415*: COBRO↔DESCOBRO/RETRO/RECOBRO, A↔DE EFECTIVO, A↔DE PAPEL, cobros +/−."""
     return _regla_k_comun(
         conn, ejercicio, run_id, tol, "RULE_K",
         "(cuenta LIKE '430%' OR cuenta LIKE '415%')",
         lambda c, r, a, b: f"K|{c}|{r}",
         lambda c, r, a, b: f"K2|{c}|{r}",
+        filtro_cuentas=filtro_cuentas,
     )
 
 
-def regla_k2(conn, ejercicio, run_id, tol, **_):
+def regla_k2(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     """Igual que K, solo cuentas 440*, con un grupo por pareja."""
     return _regla_k_comun(
         conn, ejercicio, run_id, tol, "RULE_K2",
         "cuenta LIKE '440%'",
         lambda c, r, a, b: f"K2|{c}|{r}|{abs(hash((a, b))) % 100000}",
         lambda c, r, a, b: f"K2B|{c}|{r}|{abs(hash((a, b))) % 100000}",
+        filtro_cuentas=filtro_cuentas,
     )
 
 
 # ── RULE_RETRO — Retroceso% contra Retro.Reco% de la misma cuenta y fecha (440*) ─
 
-def regla_retro(conn, ejercicio, run_id, tol, **_):
+def regla_retro(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     retrocesos = _filas(conn, """
         SELECT id, cuenta, fecha, neto::float8 AS neto
         FROM cc_apuntes
@@ -388,21 +391,23 @@ def regla_retro(conn, ejercicio, run_id, tol, **_):
         for m in match:
             pares.append((gid, m))
             usados.add(m)
-    return marcar(conn, "RULE_RETRO", pares, run_id)
+    return marcar(conn, "RULE_RETRO", pares, run_id, filtro_cuentas=filtro_cuentas)
 
 
 # ── RULE_RETROCESO — Retroceso 440* contra los cobros de los recibos 4152* del asiento ─
 
-def regla_retroceso(conn, ejercicio, run_id, tol, **_):
+def regla_retroceso(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     """Igual que el original: se procesa retroceso a retroceso y cada grupo se puntea en
-    el momento, de modo que los cobros ya usados no se ofrecen a los siguientes."""
+    el momento, de modo que los cobros ya usados no se ofrecen a los siguientes.
+    El filtro de cuentas se aplica al retroceso: sus cobros son siempre de la misma cuenta."""
+    fc, fc_params = filtro_cuentas_sql(filtro_cuentas)
     retrocesos = _filas(conn, """
         SELECT id, cuenta, neto::float8 AS neto, asiento_key
         FROM cc_apuntes
         WHERE ejercicio = :ej AND NOT reconciled AND cuenta LIKE '440%'
-          AND UPPER(concepto_norm) LIKE 'RETROCESO%'
+          AND UPPER(concepto_norm) LIKE 'RETROCESO%' {fc}
         ORDER BY asiento_key COLLATE "C", id
-    """, ej=ejercicio)
+    """.replace("{fc}", fc), ej=ejercicio, **fc_params)
     grupos = 0
     for ret in retrocesos:
         lineas_4152 = _filas(conn, """
@@ -450,7 +455,7 @@ def regla_retroceso(conn, ejercicio, run_id, tol, **_):
 
 # ── RULE_Q — Emisión + A real/De real, Emisión + Cobro, A real Recibo (todos los ejercicios) ─
 
-def regla_q(conn, ejercicio, run_id, tol, **_):
+def regla_q(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     pares = []
 
     # Pasada 1: A real + De real (emparejados 1:1 de menor a mayor importe)
@@ -558,7 +563,7 @@ def regla_q(conn, ejercicio, run_id, tol, **_):
                 partner = neg.pop(best_i)
                 gid = f"RULE_Q3P|{cuenta}|{recibo}|{p['id']}"
                 pares += [(gid, p["id"]), (gid, partner["id"])]
-    return marcar(conn, "RULE_Q", pares, run_id, solo_pendientes=True)
+    return marcar(conn, "RULE_Q", pares, run_id, solo_pendientes=True, filtro_cuentas=filtro_cuentas)
 
 
 # ── RULE_V — cierre de saldo 440* por cuenta y ejercicio (siempre la última) ───
@@ -703,7 +708,7 @@ def _buscar_exclusion(items, suma, tolerance):
     return None, None
 
 
-def regla_v(conn, ejercicio, run_id, tol, **_):
+def regla_v(conn, ejercicio, run_id, tol, filtro_cuentas=None, **_):
     lineas = _filas(conn, """
         SELECT id, cuenta, neto::float8 AS neto
         FROM cc_apuntes
@@ -730,4 +735,4 @@ def regla_v(conn, ejercicio, run_id, tol, **_):
         if conciliar and len(conciliar) >= 2:
             gid = f"V|{ejercicio}|{cuenta}|PARTIAL"
             pares += [(gid, cid) for cid in conciliar]
-    return marcar(conn, "RULE_V", pares, run_id, solo_pendientes=True)
+    return marcar(conn, "RULE_V", pares, run_id, solo_pendientes=True, filtro_cuentas=filtro_cuentas)

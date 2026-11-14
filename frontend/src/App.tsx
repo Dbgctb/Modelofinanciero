@@ -34,6 +34,10 @@ import FugaAlertas from './pages/crossSelling/FugaAlertas'
 import Efectividad from './pages/crossSelling/Efectividad'
 import CrossSellingConfiguracion from './pages/crossSelling/Configuracion'
 import CierresEnPreparacion from './pages/cierres/EnPreparacion'
+import CierresImportar from './pages/cierres/ImportarDiario'
+import CierresPunteo from './pages/cierres/PunteoAutomatico'
+import CierresManual from './pages/cierres/PunteoManual'
+import CierresConciliados from './pages/cierres/VerConciliados'
 
 // Ref global que AppErrorConfig rellena con el contexto de notificaciones antd
 let _notify: ((msg: string, type?: 'error' | 'warning' | 'info') => void) | null = null
@@ -129,11 +133,11 @@ export default function App() {
                 <Route path="cross-selling/configuracion" element={<CrossSellingConfiguracion />} />
 
                 {/* Cierres contabilidad (en preparación, ver docs/PLAN_CIERRES_CONTABILIDAD.md) */}
-                <Route path="cierres/importar" element={<CierresEnPreparacion key="importar" titulo="Importar diario" descripcion="Carga del diario completo de un ejercicio, o solo los apuntes nuevos, con revisión de nuevos y huérfanos." fase="fase 3" />} />
-                <Route path="cierres/punteo" element={<CierresEnPreparacion key="punteo" titulo="Punteo automático" descripcion="Ejecuta las reglas de punteo por ejercicio, con sus tolerancias, y los controles de calidad C, D, K y L." fase="fase 3" />} />
-                <Route path="cierres/manual" element={<CierresEnPreparacion key="manual" titulo="Punteo manual" descripcion="Puntea a mano apuntes 1:1 o N:N, y desconcilia grupos." fase="fase 3" />} />
+                <Route path="cierres/importar" element={<CierresImportar />} />
+                <Route path="cierres/punteo" element={<CierresPunteo />} />
+                <Route path="cierres/manual" element={<CierresManual />} />
                 <Route path="cierres/recobros" element={<CierresEnPreparacion key="recobros" titulo="Recobros (Diagnóstico H)" descripcion="Recobros de comisiones sin cobro asociado: emparejamientos guardados, asignar cobro y Excel." fase="fase 5" />} />
-                <Route path="cierres/conciliados" element={<CierresEnPreparacion key="conciliados" titulo="Ver conciliados" descripcion="Grupos punteados por regla, con su detalle y exportación a Excel." fase="fase 3" />} />
+                <Route path="cierres/conciliados" element={<CierresConciliados />} />
                 <Route path="cierres/diferencias" element={<CierresEnPreparacion key="diferencias" titulo="Asientos de diferencias" descripcion="Carga, duplica o invierte asientos y genera la «Nueva carga de asientos»." fase="fase 5" />} />
                 <Route path="cierres/banco" element={<CierresEnPreparacion key="banco" titulo="Conciliación bancaria" descripcion="Extractos Norma 43 o Excel, conciliación por niveles, pendientes, manual y configuración de bancos." fase="fase 4" />} />
                 <Route path="cierres/exportar" element={<CierresEnPreparacion key="exportar" titulo="Exportar" descripcion="Excel completo del punteo." fase="fase 5" />} />

@@ -22,7 +22,8 @@ SET_PUNTEO = """reconciled = true, recon_rule = :regla, recon_run_id = :run_id,
                 recon_timestamp = LOCALTIMESTAMP"""
 
 
-def marcar(conn: Connection, regla: str, pares, run_id: int, solo_pendientes: bool = False) -> int:
+def marcar(conn: Connection, regla: str, pares, run_id: int, solo_pendientes: bool = False,
+           filtro_cuentas=None) -> int:
     """Puntea apuntes con su grupo. `pares` es una lista de (group_id, id_apunte).
 
     Reproduce el `executemany` del original, que ejecutaba un UPDATE por par en orden:
@@ -40,23 +41,28 @@ def marcar(conn: Connection, regla: str, pares, run_id: int, solo_pendientes: bo
     ids = list(grupo_de.keys())
     gids = [grupo_de[i] for i in ids]
     filtro = "AND NOT a.reconciled" if solo_pendientes else ""
+    fc, fc_params = filtro_cuentas_sql(filtro_cuentas, alias="a.")
     res = conn.execute(text(f"""
         UPDATE cc_apuntes a
         SET {SET_PUNTEO}, recon_group_id = v.gid
         FROM unnest(CAST(:ids AS integer[]), CAST(:gids AS text[])) AS v(id, gid)
-        WHERE a.id = v.id {filtro}
-    """), {"regla": regla, "run_id": run_id, "ids": ids, "gids": gids})
+        WHERE a.id = v.id {filtro} {fc}
+    """), {"regla": regla, "run_id": run_id, "ids": ids, "gids": gids, **fc_params})
     return res.rowcount or 0
 
 
-def filtro_cuentas_sql(filtro_cuentas, prefijo_param: str = "fc"):
-    """Condición SQL parametrizada para el filtro de cuentas de la regla A.
+def filtro_cuentas_sql(filtro_cuentas, alias: str = "", prefijo_param: str = "fc"):
+    """Condición SQL parametrizada para el filtro de cuentas de la pantalla Punteo automático.
+
+    Se aplica a TODAS las reglas (decisión del usuario 2026-11-14; el original solo lo
+    aplicaba a la regla A). Como todos los grupos de todas las reglas son de una sola
+    cuenta, filtrar al puntear equivale a puntear solo esas cuentas sin alterar los grupos.
 
     `filtro_cuentas`: lista como ["4300*", "4110000001"]; "*" o vacío = todas.
     El original concatenaba el texto en el SQL; aquí solo se admiten dígitos y "*".
     Devuelve (sql, params). sql vacío si no hay filtro.
     """
-    if not filtro_cuentas or filtro_cuentas == ["*"]:
+    if not filtro_cuentas or any(str(c).strip() == "*" for c in filtro_cuentas):
         return "", {}
     conds, params = [], {}
     for n, cuenta in enumerate(filtro_cuentas):
@@ -66,9 +72,9 @@ def filtro_cuentas_sql(filtro_cuentas, prefijo_param: str = "fc"):
             raise ValueError(f"Cuenta no válida en el filtro: {cuenta!r} (solo dígitos y *)")
         p = f"{prefijo_param}{n}"
         if "*" in c:
-            conds.append(f"cuenta LIKE :{p}")
+            conds.append(f"{alias}cuenta LIKE :{p}")
             params[p] = base + "%"
         else:
-            conds.append(f"cuenta = :{p}")
+            conds.append(f"{alias}cuenta = :{p}")
             params[p] = base
     return "AND (" + " OR ".join(conds) + ")", params
