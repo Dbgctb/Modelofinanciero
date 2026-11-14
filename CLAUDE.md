@@ -170,7 +170,7 @@ Código;Nombre;F.Alta;F.Nacimie;Fis/Jur;T. Fijo;T. Móvil;E-Mail
 ## Módulo Cierres contabilidad
 
 Punteo del diario completo y conciliación bancaria. Reconstruye en PostgreSQL el programa de escritorio
-"Cuadre Contable" (`Antigravity/CC con repositorio/`, PySide6 + SQLite). Plan, decisiones, pruebas y estado:
+"Cuadre Contable" (PySide6 + SQLite; archivado en `Antigravity/_archivo/CC con repositorio/`). Plan, decisiones, pruebas y estado:
 **`docs/PLAN_CIERRES_CONTABILIDAD.md`** (leerlo antes de tocar el módulo).
 
 ### Datos

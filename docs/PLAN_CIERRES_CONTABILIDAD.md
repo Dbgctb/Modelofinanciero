@@ -1,7 +1,7 @@
 # Plan: módulo "Cierres contabilidad"
 
 Integración en el Modelo financiero del programa de escritorio "Cuadre Contable"
-(carpeta `Antigravity/CC con repositorio/`). Plan aprobado en sus decisiones de alcance
+(carpeta `Antigravity/CC con repositorio/`, archivada el 2026-11-14 en `Antigravity/_archivo/CC con repositorio/`). Plan aprobado en sus decisiones de alcance
 por el usuario el 2026-11-14:
 
 1. Los datos se migran **tal como están**, con el estado de punteo y los punteos manuales.
@@ -267,8 +267,10 @@ restaurado con `migrar_cuadre_sqlite.py --reemplazar` (verificado idéntico).
 
 ### Fase 6: cierre
 - `CLAUDE.md` y `README.md` del proyecto documentan el módulo.
-- Pendiente del usuario: validar todas las pantallas en la app. Después, archivar (no borrar) la carpeta
-  `CC con repositorio/` y decidir el merge de la rama a `main`.
+- 2026-11-14, por decisión del usuario: rama fusionada en `main` (`ad1957a`) y carpeta original archivada (no
+  borrada) en `Antigravity/_archivo/CC con repositorio/`; su SQLite sigue siendo el origen para
+  `migrar_cuadre_sqlite.py --reemplazar`.
+- Pendiente: la prueba de las pantallas en el navegador por parte del usuario.
 
 ### Prueba de paridad (fase 2 y fase 4)
 El estado guardado en el SQLite se generó con versiones anteriores de las reglas. Por eso se compara
@@ -324,4 +326,4 @@ Para repetir la migración: `scripts/migrar_cuadre_sqlite.py RUTA_SQLITE --reemp
 | 3 Pantallas de punteo | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
 | 4 Conciliación bancaria | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
 | 5 Herramientas | Hecho, pendiente de tu prueba en la app | 2026-11-14 | (este commit) |
-| 6 Cierre | Documentación hecha; falta tu validación en la app y archivar la carpeta original | 2026-11-14 | (este commit) |
+| 6 Cierre | Hecho: fusionado en main y carpeta original archivada; falta la prueba en la app | 2026-11-14 | ad1957a |
