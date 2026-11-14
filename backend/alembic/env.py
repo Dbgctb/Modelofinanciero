@@ -30,6 +30,7 @@ import app.models.auxiliares
 import app.models.analitico
 import app.models.cliente
 import app.models.password_reset
+import app.models.cierres
 
 config = context.config
 
