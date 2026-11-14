@@ -12,7 +12,7 @@ from .core.limiter import limiter
 from .core.config import settings
 from .core.database import Base, engine
 from .core.logging_config import setup_logging
-from .routers import auth, users, carga, parametros, presupuesto, tesoreria, real, kpis, analitico, admin, rentabilidad, cuadre, cross_selling
+from .routers import auth, users, carga, parametros, presupuesto, tesoreria, real, kpis, analitico, admin, rentabilidad, cuadre, cross_selling, cierres, cierres_banco, cierres_herramientas
 
 setup_logging()
 log = logging.getLogger(__name__)
@@ -116,6 +116,9 @@ app.include_router(rentabilidad.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(cuadre.router, prefix="/api")
 app.include_router(cross_selling.router, prefix="/api")
+app.include_router(cierres.router, prefix="/api")
+app.include_router(cierres_banco.router, prefix="/api")
+app.include_router(cierres_herramientas.router, prefix="/api")
 
 
 @app.get("/api/health")

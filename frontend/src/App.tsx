@@ -33,6 +33,14 @@ import Oportunidades from './pages/crossSelling/Oportunidades'
 import FugaAlertas from './pages/crossSelling/FugaAlertas'
 import Efectividad from './pages/crossSelling/Efectividad'
 import CrossSellingConfiguracion from './pages/crossSelling/Configuracion'
+import CierresRecobros from './pages/cierres/Recobros'
+import CierresDiferencias from './pages/cierres/AsientosDiferencias'
+import CierresExportar from './pages/cierres/Exportar'
+import CierresImportar from './pages/cierres/ImportarDiario'
+import CierresPunteo from './pages/cierres/PunteoAutomatico'
+import CierresManual from './pages/cierres/PunteoManual'
+import CierresConciliados from './pages/cierres/VerConciliados'
+import CierresBanco from './pages/cierres/ConciliacionBancaria'
 
 // Ref global que AppErrorConfig rellena con el contexto de notificaciones antd
 let _notify: ((msg: string, type?: 'error' | 'warning' | 'info') => void) | null = null
@@ -126,6 +134,16 @@ export default function App() {
                 <Route path="cross-selling/alertas" element={<FugaAlertas />} />
                 <Route path="cross-selling/efectividad" element={<Efectividad />} />
                 <Route path="cross-selling/configuracion" element={<CrossSellingConfiguracion />} />
+
+                {/* Cierres contabilidad (ver docs/PLAN_CIERRES_CONTABILIDAD.md) */}
+                <Route path="cierres/importar" element={<CierresImportar />} />
+                <Route path="cierres/punteo" element={<CierresPunteo />} />
+                <Route path="cierres/manual" element={<CierresManual />} />
+                <Route path="cierres/recobros" element={<CierresRecobros />} />
+                <Route path="cierres/conciliados" element={<CierresConciliados />} />
+                <Route path="cierres/diferencias" element={<CierresDiferencias />} />
+                <Route path="cierres/banco" element={<CierresBanco />} />
+                <Route path="cierres/exportar" element={<CierresExportar />} />
 
                 {/* Módulo Analítico */}
                 <Route path="analitico/dashboards" element={<DashboardsAnalitico />} />

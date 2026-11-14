@@ -88,6 +88,14 @@ frontend/src/
 | Usuarios (admin) | `/usuarios` | `/api/users` |
 | Tasas de mercado (admin) | `/admin/tasas-mercado` | `/api/admin` |
 | Reset de datos (admin) | `/admin/reset-datos` | `/api/admin` |
+| Cierres: importar diario | `/cierres/importar` | `/api/cierres` |
+| Cierres: punteo automático | `/cierres/punteo` | `/api/cierres` |
+| Cierres: punteo manual | `/cierres/manual` | `/api/cierres` |
+| Cierres: recobros (Diagnóstico H) | `/cierres/recobros` | `/api/cierres/recobros` |
+| Cierres: ver conciliados | `/cierres/conciliados` | `/api/cierres` |
+| Cierres: asientos de diferencias | `/cierres/diferencias` | `/api/cierres/diferencias` |
+| Cierres: conciliación bancaria | `/cierres/banco` | `/api/cierres/banco` |
+| Cierres: exportar | `/cierres/exportar` | `/api/cierres/exportar` |
 
 ---
 
@@ -156,6 +164,45 @@ Código;Nombre;F.Alta;F.Nacimie;Fis/Jur;T. Fijo;T. Móvil;E-Mail
 ### Flujo tras cambios en el motor
 1. Reiniciar backend (ejecuta migraciones `ALTER TABLE`).
 2. Pulsar **Recalcular** en UI → regenera `cross_selling_oportunidades` y `fuga_alertas` con todos los campos actualizados.
+
+---
+
+## Módulo Cierres contabilidad
+
+Punteo del diario completo y conciliación bancaria. Reconstruye en PostgreSQL el programa de escritorio
+"Cuadre Contable" (`Antigravity/CC con repositorio/`, PySide6 + SQLite). Plan, decisiones, pruebas y estado:
+**`docs/PLAN_CIERRES_CONTABILIDAD.md`** (leerlo antes de tocar el módulo).
+
+### Datos
+- Tablas propias `cc_*` (migración Alembic `e0af6e045937`). **No tienen relación con `diario_apuntes`**, que solo
+  guarda los grupos 6/7 para la Cuenta de Resultados y el Analítico.
+- Columnas con los nombres del original (`reconciled`, `recon_rule`, `recon_group_id`…) e ids de apunte originales:
+  los referencian sin clave foránea `cc_emparejamientos_h.cobro_id`, `cc_incidencias.line_ids` y
+  `cc_extractos.recon_journal_id`.
+
+### Código
+- Backend: `services/cierres/` (motor.py + reglas/, controles.py, importador.py, consultas.py, recobros.py,
+  diferencias.py, exportar.py, excel.py, tareas.py, banco/) y routers `cierres.py`, `cierres_banco.py`,
+  `cierres_herramientas.py`.
+- Frontend: `pages/cierres/` (8 pantallas; `banco/` con las 5 pestañas de la conciliación bancaria) y `api/cierres.ts`.
+- Tareas largas (importar, puntear, conciliar banco, Excel grandes) en segundo plano: `tareas.lanzar()` devuelve
+  `task_id` y se consulta `GET /api/cierres/tareas/{id}`. Solo una tarea que escriba a la vez (409 si hay otra).
+- La lista de bloques de "Ver conciliados" se cachea en memoria; cualquier escritura debe llamar a
+  `consultas.invalidar_cache()` (las tareas de escritura ya lo hacen).
+
+### Reglas del motor (no romper la paridad con el original)
+- `LIKE` de SQLite no distingue mayúsculas → patrones sobre conceptos con `ILIKE`.
+- La base ordena texto con intercalación Spanish_Spain (ignora `|`, `-`, espacios). Donde el orden decide qué
+  apunte se consume, `ORDER BY ... COLLATE "C"` y desempate por `id`.
+- Reglas en Python con `neto::float8` (algoritmos iguales al original); reglas SQL con sumas NUMERIC exactas
+  (decisión del usuario: B y C ya no rechazan grupos que cuadran al céntimo).
+- Tras cambiar reglas o el motor bancario: `backend/scripts/paridad_punteo.py` y `paridad_banco.py` comparan
+  con el original apunte a apunte y restauran la base al terminar.
+
+### Restaurar los datos del original
+`backend/scripts/migrar_cuadre_sqlite.py RUTA_SQLITE --reemplazar` vacía las `cc_*` y copia de nuevo el SQLite
+(solo lectura) con verificación fila a fila. **Borra todo lo hecho en el módulo desde la migración**: solo con
+autorización del usuario.
 
 ---
 

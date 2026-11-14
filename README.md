@@ -86,6 +86,13 @@ frontend/
 
 ---
 
+## Módulo Cierres contabilidad
+
+Punteo del diario completo y conciliación bancaria (menú "Cierres contabilidad"). Sustituye al programa de
+escritorio "Cuadre Contable". Detalle técnico, decisiones y pruebas: `docs/PLAN_CIERRES_CONTABILIDAD.md`.
+
+---
+
 ## Seguridad implementada
 
 - JWT (access 15 min + refresh 7 días con rotación)

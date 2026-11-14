@@ -5,7 +5,7 @@ import {
   TeamOutlined, LogoutOutlined, UserOutlined, KeyOutlined,
   BellOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
   SettingOutlined, DatabaseOutlined, DeleteOutlined, RiseOutlined,
-  SafetyCertificateOutlined, BulbOutlined,
+  SafetyCertificateOutlined, BulbOutlined, AuditOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation, Outlet } from 'react-router-dom'
 import { useAuthStore } from '../../store/authStore'
@@ -52,6 +52,21 @@ const MENU_ITEMS = [
       { key: '/cross-selling/alertas',         label: 'Alertas de fuga' },
       { key: '/cross-selling/efectividad',     label: 'Efectividad' },
       { key: '/cross-selling/configuracion',   label: 'Configuración' },
+    ],
+  },
+  {
+    key: 'cierres',
+    icon: <AuditOutlined />,
+    label: 'Cierres contabilidad',
+    children: [
+      { key: '/cierres/importar',     label: 'Importar diario' },
+      { key: '/cierres/punteo',       label: 'Punteo automático' },
+      { key: '/cierres/manual',       label: 'Punteo manual' },
+      { key: '/cierres/recobros',     label: 'Recobros (Diagnóstico H)' },
+      { key: '/cierres/conciliados',  label: 'Ver conciliados' },
+      { key: '/cierres/diferencias',  label: 'Asientos de diferencias' },
+      { key: '/cierres/banco',        label: 'Conciliación bancaria' },
+      { key: '/cierres/exportar',     label: 'Exportar' },
     ],
   },
   {
