@@ -1,0 +1,5 @@
+# Herramientas de desarrollo (no hacen falta para ejecutar la aplicación).
+# Instalar con: venv\Scripts\python -m pip install -r requirements-dev.txt
+-r requirements.txt
+pytest==9.2.0
+ruff==0.17.5

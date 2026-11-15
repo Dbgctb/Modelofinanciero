@@ -1,6 +1,7 @@
 import logging
 import time
 import traceback
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,31 +19,45 @@ from .routers import auth, users, carga, parametros, presupuesto, tesoreria, rea
 setup_logging()
 log = logging.getLogger(__name__)
 
-# Crear tablas
-Base.metadata.create_all(bind=engine)
+_MIGRACIONES_INCREMENTALES = [
+    "ALTER TABLE ramo_stats_ejercicio ADD COLUMN IF NOT EXISTS ramo_categoria VARCHAR(100)",
+    "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono_fijo VARCHAR(30)",
+    "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono_movil VARCHAR(30)",
+    "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email VARCHAR(200)",
+    "ALTER TABLE cross_selling_oportunidades ADD COLUMN IF NOT EXISTS subramos_vigentes JSONB",
+    "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS tipo_cliente VARCHAR(20)",
+    "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS auxiliar VARCHAR(150)",
+    "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS ramos_actuales JSONB",
+    "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS liqui_vigente FLOAT",
+]
 
-# Migraciones incrementales (ADD COLUMN IF NOT EXISTS es idempotente)
-from sqlalchemy import text as _sql
-with engine.connect() as _conn:
-    for _stmt in [
-        "ALTER TABLE ramo_stats_ejercicio ADD COLUMN IF NOT EXISTS ramo_categoria VARCHAR(100)",
-        "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono_fijo VARCHAR(30)",
-        "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono_movil VARCHAR(30)",
-        "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email VARCHAR(200)",
-        "ALTER TABLE cross_selling_oportunidades ADD COLUMN IF NOT EXISTS subramos_vigentes JSONB",
-        "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS tipo_cliente VARCHAR(20)",
-        "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS auxiliar VARCHAR(150)",
-        "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS ramos_actuales JSONB",
-        "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS liqui_vigente FLOAT",
-    ]:
-        _conn.execute(_sql(_stmt))
-    _conn.commit()
+
+def preparar_base_de_datos() -> None:
+    """Crea las tablas que falten y aplica las migraciones incrementales (idempotente).
+
+    Se ejecuta al arrancar el servidor (lifespan), no al importar el módulo: así los tests
+    pueden cargar la aplicación sin tocar la base de datos.
+    """
+    from sqlalchemy import text as _sql
+    Base.metadata.create_all(bind=engine)
+    with engine.connect() as conn:
+        for stmt in _MIGRACIONES_INCREMENTALES:  # ADD COLUMN IF NOT EXISTS es idempotente
+            conn.execute(_sql(stmt))
+        conn.commit()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    preparar_base_de_datos()
+    yield
+
 
 app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
     docs_url="/api/docs" if settings.APP_ENV == "development" else None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 app.state.limiter = limiter

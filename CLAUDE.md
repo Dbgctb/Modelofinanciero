@@ -262,11 +262,16 @@ LOCKOUT_MINUTES=15
 Antes de dar por terminado cualquier cambio, verificar obligatoriamente:
 
 1. **Backend compila** — `uvicorn app.main:app --reload` arranca sin errores de importación ni de SQLAlchemy.
-2. **Migraciones de BD** — si se añade una columna a una tabla existente, añadir un `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` en el bloque de migraciones de `main.py`. `create_all` solo crea tablas nuevas, no columnas.
+2. **Migraciones de BD** — si se añade una columna a una tabla existente, añadir un `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` en `_MIGRACIONES_INCREMENTALES` de `main.py` (se aplican al arrancar, en `preparar_base_de_datos()`). `create_all` solo crea tablas nuevas, no columnas.
 3. **Frontend compila** — `npx tsc --noEmit` sin errores TypeScript, o `npm run build` limpio.
 4. **No variables indefinidas** — revisar que toda variable usada en el código Python esté definida en el scope correcto.
 5. **Rutas y menú coherentes** — si se añade una página nueva, verificar que existe la ruta en `App.tsx` y el ítem en `AppLayout.tsx`.
 6. **Señales de fuga** — si se añade una señal nueva, añadirla en `SENAL_CONFIG` de `FugaAlertas.tsx`.
+7. **Tests** — `venv\Scripts\python -m pytest` en `backend/` sin fallos (no tocan la BD; ver README § Tests).
+   Lógica nueva o bug corregido → test nuevo en `backend/tests/`. `test_permisos.py` falla si se añade un
+   endpoint sin sesión o un DELETE sin rol: si una ruta pública nueva es intencionada, añadirla a `PUBLICOS`.
+8. **Lint sin errores nuevos** — `ruff check app scripts tests` (backend) y `npm run lint` (frontend) están en
+   modo informe: no añadir avisos nuevos en el código que se toque.
 
 ---
 

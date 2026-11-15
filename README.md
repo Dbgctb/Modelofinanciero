@@ -63,6 +63,28 @@ npm run dev
 
 ---
 
+## Tests y análisis de código
+
+Los tests no usan la base de datos (apuntan a una URL inexistente a propósito) y tardan unos segundos.
+
+```bash
+# Backend: una vez, instalar las herramientas de desarrollo
+cd backend
+venv\Scripts\python -m pip install -r requirements-dev.txt
+
+venv\Scripts\python -m pytest                     # tests
+venv\Scripts
+venv\Scripts\ruff check app scripts tests          # linter (modo informe)
+venv\Scripts\python scripts\catalogo_errores.py    # catálogo de errores al día
+
+# Frontend
+cd frontend
+npm run lint                                       # ESLint (modo informe)
+npx tsc --noEmit                                   # tipos
+```
+
+---
+
 ## Estructura del proyecto
 
 ```
