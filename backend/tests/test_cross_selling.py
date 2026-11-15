@@ -89,3 +89,33 @@ def test_matriz_afinidad_con_descripcion_por_defecto():
     params = SimpleNamespace(matriz_afinidad=[{"ramo_base": "AUTO", "ramo_objetivo": "VIDA", "afinidad": 0.5}])
     afinidad, desc, objetivos = cs._matriz_afinidad(params)
     assert afinidad[("AUTO", "VIDA")] == 0.5 and desc[("AUTO", "VIDA")] == "AUTO → VIDA" and objetivos == ["VIDA"]
+
+
+def test_margenes_de_rentabilidad_usa_tomador_y_margen_estimado():
+    rent = {"clientes": [
+        {"tomador": "garcía pérez ana", "margen_pct": 40.0, "margen_pct_estimado": 25.0},
+        {"tomador": "__SIN_CLIENTE__", "margen_pct": 10.0, "margen_pct_estimado": 10.0},
+        {"tomador": "", "margen_pct_estimado": 5.0},
+        {"tomador": "LUIS", "margen_pct_estimado": None},
+    ]}
+    assert cs._margenes_de_rentabilidad(rent) == {cs._norm_nombre("garcía pérez ana"): 0.25}
+    assert cs._margenes_de_rentabilidad({"sin_datos": True}) == {}
+
+
+def _ctx_alerta(margenes):
+    return SimpleNamespace(ejercicio=2026, margenes_reales=margenes, ahora=None)
+
+
+def _cli_alerta(**kw):
+    base = dict(tomador="ANA", cliente_id=None, liqui_vigente=1000.0, prima_vigente=5000.0,
+                dias_vencimiento=None, n_ramos=1, antiguedad=3.0, tipo=cs.TipoCliente.FISICO,
+                auxiliar=None, ramos_vigentes={"AUTO"})
+    base.update(kw)
+    return base
+
+
+@pytest.mark.parametrize("margenes,valor", [({"ANA": 0.25}, 250.0), ({}, 150.0), ({"ANA": -0.4}, 0.0)])
+def test_valor_protegido_con_margen_real(margenes, valor):
+    senales = [{"tipo": "mono_cartera", "desc": "x", "peso": 0.45}]
+    alerta = cs._alerta_fuga(_ctx_alerta(margenes), _cli_alerta(), senales, 0.45)
+    assert alerta.valor_protegido == valor and alerta.prioridad >= 0

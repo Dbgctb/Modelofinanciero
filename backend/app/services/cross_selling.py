@@ -473,21 +473,28 @@ def _medias_por_ramo(stats_bd: list, recibos_act: list) -> tuple[dict, dict]:
 def _margenes_reales(db: Session, ejercicio: int) -> dict[str, float]:
     """{tomador_norm: margen decimal} desde el módulo de rentabilidad.
 
-    OJO (auditoría 2026-11-15, pendiente de decisión): las claves no coinciden con las que
-    devuelve calcular_rentabilidad_clientes ('tomador', y no hay 'margen_pct_normalizado' por
-    cliente), así que este diccionario sale SIEMPRE vacío y las alertas de fuga usan el margen
-    por defecto del 15 %. Se conserva tal cual en el refactor (no cambia resultados).
+    Usa margen_pct_estimado (decisión del usuario, 2026-11-15): descuenta la cesión estimada
+    aún no pagada y, sin ella, coincide con margen_pct. Hasta esa fecha se leían claves que no
+    existen ('cliente', 'margen_pct_normalizado') y todas las alertas usaban el 15 % por defecto.
+    Los clientes que no salen aquí siguen usando el 15 %.
     """
-    margenes: dict[str, float] = {}
     try:
         rent = calcular_rentabilidad_clientes(db, ejercicio)
-        if not rent.get('sin_datos'):
-            for c in rent.get('clientes', []):
-                m = c.get('margen_pct_normalizado')
-                if m is not None:
-                    margenes[_norm_nombre(c.get('cliente', ''))] = float(m) / 100
     except Exception:
-        pass  # si el módulo falla, usamos proxy 15%
+        log.exception("Rentabilidad por cliente no disponible (ejercicio %s): margen por defecto 15 %%", ejercicio)
+        return {}
+    return _margenes_de_rentabilidad(rent)
+
+
+def _margenes_de_rentabilidad(rent: dict) -> dict[str, float]:
+    if rent.get('sin_datos'):
+        return {}
+    margenes: dict[str, float] = {}
+    for c in rent.get('clientes', []):
+        tomador, m = c.get('tomador'), c.get('margen_pct_estimado')
+        if not tomador or tomador == "__SIN_CLIENTE__" or m is None:
+            continue
+        margenes[_norm_nombre(tomador)] = float(m) / 100
     return margenes
 
 
@@ -729,7 +736,8 @@ def _alerta_fuga(ctx: _Contexto, cli: dict, senales: list[dict], peso_acum: floa
     # valor_protegido = comisión activa × margen neto del cliente
     # (la comisión = liqui, que es lo que realmente ingresa el bróker)
     base_valor = cli['liqui_vigente'] if cli['liqui_vigente'] > 0 else cli['prima_vigente']
-    valor_protegido = round(base_valor * margen_real_cli, 2)
+    # Un cliente con margen negativo no aporta valor que proteger (evita prioridades negativas).
+    valor_protegido = round(base_valor * max(0.0, margen_real_cli), 2)
     return FugaAlerta(
         ejercicio=ctx.ejercicio,
         tomador=cli['tomador'],
