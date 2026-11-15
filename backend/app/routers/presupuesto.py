@@ -27,6 +27,7 @@ from ..services.presupuesto_gastos import (
     generar_cesiones_auxiliar, recalcular_cesion, importar_cesiones_excel,
 )
 from ..core.errores import detalle_usuario, error_http
+from ..core.subidas import leer_subida
 
 router = APIRouter(prefix="/presupuesto", tags=["Presupuestación"])
 
@@ -438,7 +439,7 @@ async def importar_ingresos(
     """Importa líneas de ingresos desde Excel. Borra las no bloqueadas y carga las del fichero."""
     p = _get_presupuesto(db, presupuesto_id)
     _validar_no_cerrado(p)
-    contenido = await file.read()
+    contenido = await leer_subida(file, (".xlsx", ".xls"), max_mb=20, esperado="Excel (.xlsx o .xls)")
     try:
         resultado = importar_lineas_ingresos_excel(db, p, contenido)
     except ValueError as exc:
@@ -863,7 +864,7 @@ async def importar_cesiones(
     """Importa parámetros de cesiones (% comisión, tipo, retención) desde Excel."""
     p = _get_presupuesto(db, presupuesto_id)
     _validar_no_cerrado(p)
-    contenido = await file.read()
+    contenido = await leer_subida(file, (".xlsx", ".xls"), max_mb=20, esperado="Excel (.xlsx o .xls)")
     try:
         resultado = importar_cesiones_excel(db, p, contenido)
     except ValueError as exc:

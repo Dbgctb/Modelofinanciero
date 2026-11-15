@@ -174,21 +174,14 @@ def cargar_csv_clientes(db: Session, contenido: bytes) -> Tuple[int, int]:
             existente.fecha_alta = fecha_alta
             existente.fecha_nacimiento = fecha_nac
             existente.tipo = tipo
+            # Antes cada asignación iba en try/except: pass, que ocultaba cualquier fallo y
+            # contaba el cliente como actualizado igualmente. Un error aquí debe verse.
             if tel_fijo is not None:
-                try:
-                    existente.telefono_fijo = tel_fijo
-                except Exception:
-                    pass
+                existente.telefono_fijo = tel_fijo
             if tel_movil is not None:
-                try:
-                    existente.telefono_movil = tel_movil
-                except Exception:
-                    pass
+                existente.telefono_movil = tel_movil
             if email is not None:
-                try:
-                    existente.email = email
-                except Exception:
-                    pass
+                existente.email = email
             actualizados += 1
         else:
             # Solo incluir campos de contacto si tienen valor,

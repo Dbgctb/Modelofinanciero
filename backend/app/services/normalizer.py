@@ -7,7 +7,6 @@ Lógica de enriquecimiento de apuntes contables:
 import re
 import unicodedata
 from typing import Optional
-from sqlalchemy.orm import Session
 
 
 def norm_col(nombre: str) -> str:
@@ -30,7 +29,6 @@ def norm_col(nombre: str) -> str:
     # 4. Eliminar '_' al inicio/final
     return clean.strip('_')
 from ..models.parametros import MapCuentaContable, TipoCuentaParam
-from ..models.recibo import Recibo
 from ..models.diario import TipoCuenta
 
 CODIGO_REGEX = re.compile(r'(\d{6})\D*$')
@@ -92,32 +90,6 @@ def extraer_ramo(producto: Optional[str]) -> Optional[str]:
     return None
 
 
-def buscar_mapa_cuenta(db: Session, numero_cuenta: str) -> Optional[MapCuentaContable]:
-    """
-    Busca la configuración de una cuenta contable.
-    Busca primero coincidencia exacta, luego por prefijos de longitud decreciente (RF-DAT-04).
-    """
-    # Exacta
-    mapa = db.query(MapCuentaContable).filter(
-        MapCuentaContable.numero_cuenta == numero_cuenta,
-        MapCuentaContable.activo == True,
-    ).first()
-    if mapa:
-        return mapa
-
-    # Prefijos: 7 chars, 6, 5, 4, 3
-    for length in range(min(len(numero_cuenta) - 1, 7), 2, -1):
-        prefix = numero_cuenta[:length]
-        mapa = db.query(MapCuentaContable).filter(
-            MapCuentaContable.numero_cuenta == prefix,
-            MapCuentaContable.activo == True,
-        ).first()
-        if mapa:
-            return mapa
-
-    return None
-
-
 def tipo_cuenta_desde_mapa(mapa: Optional[MapCuentaContable]) -> TipoCuenta:
     if not mapa:
         return TipoCuenta.NO_CLASIFICADA
@@ -131,9 +103,3 @@ def tipo_cuenta_desde_mapa(mapa: Optional[MapCuentaContable]) -> TipoCuenta:
     return mapping.get(mapa.tipo, TipoCuenta.NO_CLASIFICADA)
 
 
-def buscar_recibo(db: Session, codigo: str, ejercicio: int) -> Optional[Recibo]:
-    """Busca el recibo por código en el ejercicio dado (RF-DAT-07)."""
-    return db.query(Recibo).filter(
-        Recibo.codigo == codigo,
-        Recibo.ejercicio == ejercicio,
-    ).first()

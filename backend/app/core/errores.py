@@ -84,6 +84,8 @@ _ENTRADAS = [
      "Pon en backend/.env una SECRET_KEY aleatoria de 64 caracteres."),
     ("CFG-002", 500, "ALLOWED_ORIGINS no puede contener '*' — especifica dominios concretos",
      "Lista en ALLOWED_ORIGINS solo los dominios del frontend (p. ej. http://localhost:5173)."),
+    ("CFG-003", 500, "ALGORITHM no válido ({valor}): debe ser HS256, HS384 o HS512",
+     "Pon ALGORITHM=HS256 en backend/.env."),
 
     # ── Archivos (común a todas las cargas) ──────────────────────────────────
     ("ARC-001", 400, "El archivo seleccionado está vacío. Comprueba el fichero antes de subirlo",

@@ -9,7 +9,7 @@ Los valores entre llaves (`{faltan}`, `{n}`…) se sustituyen por los datos conc
 ## Índice
 
 - [GEN · General](#gen--general) (4)
-- [CFG · Configuración del servidor](#cfg--configuración-del-servidor) (2)
+- [CFG · Configuración del servidor](#cfg--configuración-del-servidor) (3)
 - [ARC · Subida de archivos (común)](#arc--subida-de-archivos-común) (3)
 - [AUTH · Autenticación](#auth--autenticación) (11)
 - [USR · Usuarios](#usr--usuarios) (8)
@@ -44,6 +44,7 @@ Los valores entre llaves (`{faltan}`, `{n}`…) se sustituyen por los datos conc
 |---|---|---|---|
 | `CFG-001` | 500 | SECRET_KEY debe tener al menos 32 caracteres | Pon en backend/.env una SECRET_KEY aleatoria de 64 caracteres. |
 | `CFG-002` | 500 | ALLOWED_ORIGINS no puede contener '*' — especifica dominios concretos | Lista en ALLOWED_ORIGINS solo los dominios del frontend (p. ej. http://localhost:5173). |
+| `CFG-003` | 500 | ALGORITHM no válido ({valor}): debe ser HS256, HS384 o HS512 | Pon ALGORITHM=HS256 en backend/.env. |
 
 ## ARC — Subida de archivos (común)
 

@@ -4,6 +4,7 @@ from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 import re
+import uuid
 from .config import settings
 
 # Suppress passlib/bcrypt 4.x version-attribute incompatibility warning (cosmetic only)
@@ -30,14 +31,16 @@ def verify_password(plain: str, hashed: str) -> bool:
 def create_access_token(data: dict) -> str:
     payload = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload.update({"exp": expire, "type": "access"})
+    payload.update({"exp": expire, "type": "access", "jti": uuid.uuid4().hex})
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def create_refresh_token(data: dict) -> str:
     payload = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    payload.update({"exp": expire, "type": "refresh"})
+    # jti aleatorio: sin él, dos tokens del mismo usuario emitidos en el mismo segundo eran
+    # idénticos y la renovación inmediata chocaba con la unicidad de token_hash (error 500).
+    payload.update({"exp": expire, "type": "refresh", "jti": uuid.uuid4().hex})
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 

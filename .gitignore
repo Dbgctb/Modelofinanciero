@@ -50,3 +50,7 @@ capturas/
 # repositorio, ni siquiera privado.
 carga de datos/
 frontend/query
+
+# Salidas de herramientas (tsc, scripts de reparación)
+frontend/tsc_*.txt
+backend/repair_*.txt

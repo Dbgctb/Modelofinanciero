@@ -27,6 +27,14 @@ class Settings(BaseSettings):
             raise ErrorApp("CFG-001")
         return v
 
+    @field_validator("ALGORITHM")
+    @classmethod
+    def algoritmo_hmac(cls, v: str) -> str:
+        # La firma usa SECRET_KEY (clave simétrica): solo tienen sentido los HMAC.
+        if v not in {"HS256", "HS384", "HS512"}:
+            raise ErrorApp("CFG-003", valor=v)
+        return v
+
     @field_validator("ALLOWED_ORIGINS")
     @classmethod
     def no_wildcard_origins(cls, v: List[str]) -> List[str]:

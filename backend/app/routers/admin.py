@@ -14,6 +14,7 @@ from ..models.auxiliares import AuxiliarComisionRef
 from ..data.tasas_mercado_icea import TASAS_ICEA
 from ..services.auxiliares import calcular_pct_retencion
 from ..core.errores import error_http
+from ..core.subidas import leer_subida
 
 router = APIRouter(prefix="/admin", tags=["Administración"])
 log = logging.getLogger(__name__)
@@ -356,7 +357,7 @@ async def importar_auxiliares_comision_csv(
     import unicodedata
     import pandas as pd
 
-    contenido = await file.read()
+    contenido = await leer_subida(file, (".csv",), max_mb=5, esperado="CSV")
 
     df = None
     for sep in [';', ',', '\t']:

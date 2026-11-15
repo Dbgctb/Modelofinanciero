@@ -27,6 +27,11 @@ router = APIRouter(prefix="/auth", tags=["Autenticación"])
 # de validez, igual de corto que un enlace de email real.
 RESET_TOKEN_TTL_MINUTES = 60
 
+# Hash bcrypt de una contraseña aleatoria: si el usuario no existe se verifica contra él,
+# para que el login tarde lo mismo exista o no (evita averiguar usuarios por el tiempo).
+_HASH_FICTICIO = hash_password(secrets.token_urlsafe(16))
+REUSO_GRACIA_S = 30
+
 
 def _log(db: Session, action: str, user: User = None, request: Request = None, detail: str = None):
     log = AuditLog(
@@ -53,6 +58,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     ).first()
 
     if not user or not user.is_active:
+        verify_password(payload.password, _HASH_FICTICIO)  # mismo coste que un usuario real
         _log(db, "LOGIN_FAILED", detail=f"Usuario no encontrado: {payload.username}", request=request)
         raise error_http("AUTH-001")
 
@@ -103,12 +109,28 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
         raise error_http("AUTH-006")
 
     token_hash = _hash_token(payload.refresh_token)
-    stored = db.query(RefreshToken).filter(
-        RefreshToken.token_hash == token_hash,
-        RefreshToken.revoked == False,
-    ).first()
+    stored = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
 
     if not stored:
+        raise error_http("AUTH-007")
+    if stored.revoked:
+        # Un refresh token ya rotado que vuelve a usarse indica que alguien lo copió:
+        # se cierran todas las sesiones del usuario (el legítimo tendrá que volver a entrar).
+        # Excepción: si acaba de emitirse un token nuevo (< REUSO_GRACIA_S), es una carrera
+        # inocente (p. ej. una pestaña duplicada comparte el sessionStorage y renueva a la vez).
+        reciente = db.query(RefreshToken).filter(
+            RefreshToken.user_id == stored.user_id,
+            RefreshToken.created_at > datetime.now(timezone.utc) - timedelta(seconds=REUSO_GRACIA_S),
+        ).first()
+        if reciente:
+            raise error_http("AUTH-007")
+        n = db.query(RefreshToken).filter(
+            RefreshToken.user_id == stored.user_id, RefreshToken.revoked == False,
+        ).update({"revoked": True})
+        db.commit()
+        reusado = db.query(User).filter(User.id == stored.user_id).first()
+        _log(db, "REFRESH_TOKEN_REUSED", user=reusado, request=request,
+             detail=f"Refresh token revocado reutilizado; {n} sesiones cerradas")
         raise error_http("AUTH-007")
 
     user = db.query(User).filter(User.id == decoded["sub"], User.is_active == True).first()
