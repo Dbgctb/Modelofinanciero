@@ -2193,98 +2193,128 @@ def _cagr(inicio: float, fin: float, años: int) -> float | None:
     return round((fin / inicio) ** (1 / años) - 1, 4)
 
 
-def calcular_valoracion(db: Session, ejercicio: int, crecimiento_manual: float | None = None) -> dict:
-    """
-    Calcula la valoración de la correduría usando datos del modelo analítico.
-    Aplica cuatro factores de ajuste automáticos sobre los múltiplos base de mercado.
-    """
-    # ── 1. Métricas del ejercicio seleccionado ────────────────────────────────
-    pl = _q(db, _PL_SQL.format(extra=""), ej=ejercicio)
-    if not pl:
-        return {"sin_datos": True}
+# Ingreso por dimensión, de mayor a menor. Consultas fijas (sin f-string).
+_SQL_ING_POR_AUXILIAR = """
+    SELECT auxiliar, COALESCE(SUM(CASE WHEN tipo_cuenta='ingreso' THEN importe ELSE 0 END),0) AS ing
+    FROM fact_resultado_analitico WHERE ejercicio=:ej AND auxiliar IS NOT NULL
+    GROUP BY auxiliar ORDER BY ing DESC
+"""
+_SQL_ING_POR_COMPANIA = """
+    SELECT compania, COALESCE(SUM(CASE WHEN tipo_cuenta='ingreso' THEN importe ELSE 0 END),0) AS ing
+    FROM fact_resultado_analitico WHERE ejercicio=:ej AND compania IS NOT NULL
+    GROUP BY compania ORDER BY ing DESC
+"""
+_SQL_ING_POR_RAMO = """
+    SELECT ramo, COALESCE(SUM(CASE WHEN tipo_cuenta='ingreso' THEN importe ELSE 0 END),0) AS ing
+    FROM fact_resultado_analitico WHERE ejercicio=:ej AND ramo IS NOT NULL
+    GROUP BY ramo ORDER BY ing DESC
+"""
+# Pesos de los ajustes por escenario: el pesimista los atenúa, el optimista los amplifica.
+_PESO_ESCENARIO = {"pesimista": 0.5, "base": 1.0, "optimista": 1.5}
+# Umbrales de ramos premium: <30%→-0.10×, 30-50%→0×, 50-70%→+0.10×, >70%→+0.20×
+_UMBRALES_PREMIUM = [30.0, 50.0, 70.0]
 
-    total_pl = _calc_pl(pl)
-    comision_bruta = total_pl["comision_bruta"]
-    ebitda         = total_pl["ebitda"]
-    margen_pct     = total_pl["margen_pct"]
-    ratio_cesion   = total_pl["ratio_cesion_pct"]
 
-    n_recibos = db.execute(
-        _text(f"SELECT COUNT(*) FROM recibos WHERE id IN ({_REC_EN_EJ})"), {"ej": ejercicio}
-    ).scalar() or 0
+def _pct(parte: float, total: float) -> float:
+    return round(parte / total * 100, 1) if total else 0
 
-    # ── 2. Split cartera / NP ─────────────────────────────────────────────────
-    split = _q(db, """
-        SELECT es_nueva_produccion,
-               COALESCE(SUM(CASE WHEN tipo_cuenta='ingreso' THEN importe END),0) AS ing
-        FROM fact_resultado_analitico WHERE ejercicio=:ej
-        GROUP BY es_nueva_produccion
-    """, ej=ejercicio)
-    ing_np   = sum(float(r[1]) for r in split if r[0])
-    ing_cart = sum(float(r[1]) for r in split if not r[0])
-    cart_pct = round(ing_cart / comision_bruta * 100, 1) if comision_bruta else 0
-    np_pct   = round(100 - cart_pct, 1)
 
-    # ── 3. Concentración auxiliares (top 3 y top 4) ──────────────────────────
-    aux_rows = _q(db, """
-        SELECT auxiliar, COALESCE(SUM(CASE WHEN tipo_cuenta='ingreso' THEN importe ELSE 0 END),0) AS ing
-        FROM fact_resultado_analitico WHERE ejercicio=:ej AND auxiliar IS NOT NULL
-        GROUP BY auxiliar ORDER BY ing DESC
-    """, ej=ejercicio)
-    top3_aux_ing = sum(float(r[1]) for r in aux_rows[:3])
-    top3_aux_pct = round(top3_aux_ing / comision_bruta * 100, 1) if comision_bruta else 0
-    top3_aux_names = [r[0] for r in aux_rows[:3]]
-    top4_aux_ing = sum(float(r[1]) for r in aux_rows[:4])
-    top4_aux_pct = round(top4_aux_ing / comision_bruta * 100, 1) if comision_bruta else 0
-    top4_aux_names = [r[0] for r in aux_rows[:4]]
-    n_auxiliares = len(aux_rows)
-    aux_detail = [
-        {
-            "auxiliar": r[0],
-            "ingreso":  round(float(r[1]), 2),
-            "pct":      round(float(r[1]) / comision_bruta * 100, 1) if comision_bruta else 0,
-        }
-        for r in aux_rows
-    ]
+# ── Factores de ajuste sobre el múltiplo (funciones puras, con tests) ─────────
 
-    # ── 4. Concentración compañías (top 3) ────────────────────────────────────
-    comp_rows = _q(db, """
-        SELECT compania, COALESCE(SUM(CASE WHEN tipo_cuenta='ingreso' THEN importe ELSE 0 END),0) AS ing
-        FROM fact_resultado_analitico WHERE ejercicio=:ej AND compania IS NOT NULL
-        GROUP BY compania ORDER BY ing DESC
-    """, ej=ejercicio)
-    top3_comp_ing = sum(float(r[1]) for r in comp_rows[:3])
-    top3_comp_pct = round(top3_comp_ing / comision_bruta * 100, 1) if comision_bruta else 0
-    top3_comp_names = [r[0] for r in comp_rows[:3]]
-    n_companias = len(comp_rows)
+def _ajuste_cartera(cartera_pct: float) -> float:
+    """A) Calidad de cartera: más cartera recurrente frente a nueva producción, más valor."""
+    if cartera_pct >= 80:
+        return +0.25
+    if cartera_pct >= 70:
+        return +0.15
+    if cartera_pct >= 55:
+        return 0.0
+    return -0.20
 
-    # ── 5. Ramo mix (% high-value) ────────────────────────────────────────────
-    ramo_rows = _q(db, """
-        SELECT ramo, COALESCE(SUM(CASE WHEN tipo_cuenta='ingreso' THEN importe ELSE 0 END),0) AS ing
-        FROM fact_resultado_analitico WHERE ejercicio=:ej AND ramo IS NOT NULL
-        GROUP BY ramo ORDER BY ing DESC
-    """, ej=ejercicio)
-    ing_premium = sum(float(r[1]) for r in ramo_rows if r[0] in _RAMOS_PREMIUM)
-    ramo_premium_pct = round(ing_premium / comision_bruta * 100, 1) if comision_bruta else 0
-    top3_ramos = [(r[0], round(float(r[1]), 2)) for r in ramo_rows[:3]]
-    ramos_detail = [
-        {
-            "ramo":       r[0],
-            "ingreso":    round(float(r[1]), 2),
-            "pct":        round(float(r[1]) / comision_bruta * 100, 1) if comision_bruta else 0,
-            "es_premium": r[0] in _RAMOS_PREMIUM,
-        }
-        for r in ramo_rows
-    ]
-    # Umbral siguiente para ramos premium: <30%→-0.10×, 30-50%→0×, 50-70%→+0.10×, >70%→+0.20×
-    _umbrales_premium = [30.0, 50.0, 70.0]
-    umbral_premium_sig = next((u for u in _umbrales_premium if ramo_premium_pct < u), None)
-    ing_premium_faltante = (
-        round(comision_bruta * umbral_premium_sig / 100 - ing_premium, 2)
-        if umbral_premium_sig else None
-    )
 
-    # ── 6. CAGR histórico de ingresos ────────────────────────────────────────
+def _ajuste_concentracion(top3_aux_pct: float) -> float:
+    """B) Concentración en los 3 primeros auxiliares: más dependencia, menos valor."""
+    if top3_aux_pct > 70:
+        return -0.30
+    if top3_aux_pct > 55:
+        return -0.15
+    if top3_aux_pct > 40:
+        return -0.05
+    return 0.0
+
+
+def _ajuste_ramos(ramo_premium_pct: float) -> float:
+    """C) Peso de los ramos premium (más comisión y retención)."""
+    if ramo_premium_pct > 70:
+        return +0.20
+    if ramo_premium_pct > 50:
+        return +0.10
+    if ramo_premium_pct > 30:
+        return 0.0
+    return -0.10
+
+
+def _ajuste_crecimiento(cagr: float) -> float:
+    """D) Tendencia de crecimiento (CAGR)."""
+    if cagr >= 0.08:
+        return +0.25
+    if cagr >= 0.05:
+        return +0.15
+    if cagr >= 0.02:
+        return +0.05
+    if cagr >= 0.0:
+        return 0.0
+    return -0.15
+
+
+# ── Bloques de la valoración ─────────────────────────────────────────────────
+
+def _concentracion_auxiliares(db: Session, ejercicio: int, comision_bruta: float) -> dict:
+    filas = _q(db, _SQL_ING_POR_AUXILIAR, ej=ejercicio)
+    return {
+        "top3_aux_pct":   _pct(sum(float(r[1]) for r in filas[:3]), comision_bruta),
+        "top4_aux_pct":   _pct(sum(float(r[1]) for r in filas[:4]), comision_bruta),
+        "n_auxiliares":   len(filas),
+        "top3_aux_names": [r[0] for r in filas[:3]],
+        "top4_aux_names": [r[0] for r in filas[:4]],
+        "aux_detail": [
+            {"auxiliar": r[0], "ingreso": round(float(r[1]), 2), "pct": _pct(float(r[1]), comision_bruta)}
+            for r in filas
+        ],
+    }
+
+
+def _concentracion_companias(db: Session, ejercicio: int, comision_bruta: float) -> dict:
+    filas = _q(db, _SQL_ING_POR_COMPANIA, ej=ejercicio)
+    return {
+        "top3_comp_pct":   _pct(sum(float(r[1]) for r in filas[:3]), comision_bruta),
+        "n_companias":     len(filas),
+        "top3_comp_names": [r[0] for r in filas[:3]],
+    }
+
+
+def _mix_ramos(db: Session, ejercicio: int, comision_bruta: float) -> dict:
+    filas = _q(db, _SQL_ING_POR_RAMO, ej=ejercicio)
+    ing_premium = sum(float(r[1]) for r in filas if r[0] in _RAMOS_PREMIUM)
+    ramo_premium_pct = _pct(ing_premium, comision_bruta)
+    umbral_sig = next((u for u in _UMBRALES_PREMIUM if ramo_premium_pct < u), None)
+    return {
+        "ramo_premium_pct": ramo_premium_pct,
+        "top3_ramos":       [(r[0], round(float(r[1]), 2)) for r in filas[:3]],
+        "ramos_detail": [
+            {"ramo": r[0], "ingreso": round(float(r[1]), 2), "pct": _pct(float(r[1]), comision_bruta),
+             "es_premium": r[0] in _RAMOS_PREMIUM}
+            for r in filas
+        ],
+        "umbral_premium_siguiente": umbral_sig,
+        "ingreso_premium_faltante": round(comision_bruta * umbral_sig / 100 - ing_premium, 2) if umbral_sig else None,
+        "ingreso_premium_actual":   round(ing_premium, 2),
+    }
+
+
+def _crecimiento_historico(db: Session, ejercicio: int, crecimiento_manual: float | None) -> dict:
+    """CAGR a 3 y 5 años de los ingresos (cuentas 7*) y el que se usa como referencia:
+    el manual si se indica; si no 3 años (tendencia reciente), 5 años o 0."""
     hist = _q(db, """
         SELECT ejercicio, COALESCE(SUM(haber - debe),0) AS ing
         FROM diario_apuntes
@@ -2297,158 +2327,137 @@ def calcular_valoracion(db: Session, ejercicio: int, crecimiento_manual: float |
     if ej_actual:
         ej_5 = next((v for ej, v in hist_sorted if ej == ejercicio - 5), None)
         ej_3 = next((v for ej, v in hist_sorted if ej == ejercicio - 3), None)
-        if ej_5: cagr_5y = _cagr(ej_5, ej_actual, 5)
-        if ej_3: cagr_3y = _cagr(ej_3, ej_actual, 3)
+        if ej_5:
+            cagr_5y = _cagr(ej_5, ej_actual, 5)
+        if ej_3:
+            cagr_3y = _cagr(ej_3, ej_actual, 3)
 
-    # Usa 3 años como referencia principal (tendencia reciente);
-    # si no hay 3 años de datos, usa 5 años; None = sin datos históricos suficientes.
     if crecimiento_manual is not None:
-        cagr_ref = crecimiento_manual
+        cagr_ref, periodo = crecimiento_manual, "manual"
     elif cagr_3y is not None:
-        cagr_ref = cagr_3y   # 3Y más representativo de la tendencia actual
+        cagr_ref, periodo = cagr_3y, "3 años"
     elif cagr_5y is not None:
-        cagr_ref = cagr_5y
+        cagr_ref, periodo = cagr_5y, "5 años"
     else:
-        cagr_ref = 0.0
+        cagr_ref, periodo = 0.0, "—"
+    return {
+        "cagr_5y":      cagr_5y,
+        "cagr_3y":      cagr_3y,
+        "cagr_ref":     cagr_ref,  # sin redondear: se usa en el ajuste y en la referencia
+        "cagr_usado":   round(cagr_ref, 4),
+        "cagr_periodo": periodo,
+        "manual":       crecimiento_manual is not None,
+        "historico":    [{"ejercicio": e, "ingresos": round(v, 2)} for e, v in hist_sorted],
+    }
 
-    # ── 7. Factores de ajuste sobre el múltiplo ───────────────────────────────
 
-    # A) Calidad de cartera (cartera recurrente vs NP)
-    if cart_pct >= 80:   adj_cartera = +0.25
-    elif cart_pct >= 70: adj_cartera = +0.15
-    elif cart_pct >= 55: adj_cartera = 0.0
-    else:                adj_cartera = -0.20
-
-    # B) Concentración auxiliares
-    if top3_aux_pct > 70:   adj_aux = -0.30
-    elif top3_aux_pct > 55: adj_aux = -0.15
-    elif top3_aux_pct > 40: adj_aux = -0.05
-    else:                   adj_aux = 0.0
-
-    # C) Ramo mix (% en ramos premium)
-    if ramo_premium_pct > 70:   adj_ramos = +0.20
-    elif ramo_premium_pct > 50: adj_ramos = +0.10
-    elif ramo_premium_pct > 30: adj_ramos = 0.0
-    else:                       adj_ramos = -0.10
-
-    # D) Crecimiento (CAGR)
-    if cagr_ref >= 0.08:    adj_crec = +0.25
-    elif cagr_ref >= 0.05:  adj_crec = +0.15
-    elif cagr_ref >= 0.02:  adj_crec = +0.05
-    elif cagr_ref >= 0.0:   adj_crec = 0.0
-    else:                   adj_crec = -0.15
-
-    adj_total = round(adj_cartera + adj_aux + adj_ramos + adj_crec, 3)
-
-    # ── 8. Valoración por múltiplo de comisiones ─────────────────────────────
-    def _val_com(escen: str) -> dict:
-        mult_base = _MULT_COM[escen]
-        # Escenario pessimista: ajuste negativo pesa más; optimista: positivo pesa más
-        peso = {"pesimista": 0.5, "base": 1.0, "optimista": 1.5}[escen]
+def _valoraciones(comision_bruta: float, ebitda: float, adj_total: float) -> dict:
+    """Múltiplo de comisiones, múltiplo de EBITDA (si > 0) y fórmula combinada de Recoletos."""
+    def por_comisiones(escen: str) -> dict:
+        mult_base, peso = _MULT_COM[escen], _PESO_ESCENARIO[escen]
         mult = round(mult_base + adj_total * peso, 3)
-        return {
-            "multiplo_base":    mult_base,
-            "ajuste_aplicado":  round(adj_total * peso, 3),
-            "multiplo_final":   mult,
-            "valor":            round(comision_bruta * mult, 0),
-        }
+        return {"multiplo_base": mult_base, "ajuste_aplicado": round(adj_total * peso, 3),
+                "multiplo_final": mult, "valor": round(comision_bruta * mult, 0)}
 
-    # ── 9. Valoración por múltiplo de EBITDA ─────────────────────────────────
-    def _val_ebit(escen: str) -> dict | None:
+    def por_ebitda(escen: str) -> dict | None:
         if ebitda <= 0:
             return None  # EBITDA negativo: método no aplicable
-        mult_base = _MULT_EBIT[escen]
-        peso = {"pesimista": 0.5, "base": 1.0, "optimista": 1.5}[escen]
+        mult_base, peso = _MULT_EBIT[escen], _PESO_ESCENARIO[escen]
         adj_ebit = adj_total * 2 * peso  # factor de ajuste amplificado para EBITDA
         mult = round(mult_base + adj_ebit, 3)
-        return {
-            "multiplo_base":    mult_base,
-            "ajuste_aplicado":  round(adj_ebit, 3),
-            "multiplo_final":   mult,
-            "valor":            round(ebitda * mult, 0),
-        }
+        return {"multiplo_base": mult_base, "ajuste_aplicado": round(adj_ebit, 3),
+                "multiplo_final": mult, "valor": round(ebitda * mult, 0)}
 
-    # ── 10. Fórmula combinada (mercado español) ───────────────────────────────
-    # Recoletos: (2×comisiones + 5×EBITDA) / 2
-    val_combinado = None
-    if ebitda > 0:
-        val_combinado = round((2 * comision_bruta + 5 * ebitda) / 2, 0)
+    escenarios = ("pesimista", "base", "optimista")
+    return {
+        "comisiones": {e: por_comisiones(e) for e in escenarios},
+        "ebitda":     {e: por_ebitda(e) for e in escenarios},
+        # Recoletos: (2×comisiones + 5×EBITDA) / 2
+        "combinado":  round((2 * comision_bruta + 5 * ebitda) / 2, 0) if ebitda > 0 else None,
+    }
+
+
+def calcular_valoracion(db: Session, ejercicio: int, crecimiento_manual: float | None = None) -> dict:
+    """
+    Calcula la valoración de la correduría usando datos del modelo analítico.
+    Aplica cuatro factores de ajuste automáticos sobre los múltiplos base de mercado.
+    """
+    # 1. Métricas del ejercicio
+    pl = _q(db, _PL_SQL.format(extra=""), ej=ejercicio)
+    if not pl:
+        return {"sin_datos": True}
+    total_pl = _calc_pl(pl)
+    comision_bruta, ebitda = total_pl["comision_bruta"], total_pl["ebitda"]
+    n_recibos = db.execute(
+        _text(f"SELECT COUNT(*) FROM recibos WHERE id IN ({_REC_EN_EJ})"), {"ej": ejercicio}
+    ).scalar() or 0
+
+    # 2. Cartera frente a nueva producción
+    split = _q(db, """
+        SELECT es_nueva_produccion,
+               COALESCE(SUM(CASE WHEN tipo_cuenta='ingreso' THEN importe END),0) AS ing
+        FROM fact_resultado_analitico WHERE ejercicio=:ej
+        GROUP BY es_nueva_produccion
+    """, ej=ejercicio)
+    cart_pct = _pct(sum(float(r[1]) for r in split if not r[0]), comision_bruta)
+    np_pct = round(100 - cart_pct, 1)
+
+    # 3-6. Concentraciones, mix de ramos y crecimiento
+    aux = _concentracion_auxiliares(db, ejercicio, comision_bruta)
+    comp = _concentracion_companias(db, ejercicio, comision_bruta)
+    ramos = _mix_ramos(db, ejercicio, comision_bruta)
+    crec = _crecimiento_historico(db, ejercicio, crecimiento_manual)
+    cagr_ref = crec.pop("cagr_ref")
+
+    # 7. Factores de ajuste sobre el múltiplo
+    adj_cartera = _ajuste_cartera(cart_pct)
+    adj_aux = _ajuste_concentracion(aux["top3_aux_pct"])
+    adj_ramos = _ajuste_ramos(ramos["ramo_premium_pct"])
+    adj_crec = _ajuste_crecimiento(cagr_ref)
+    adj_total = round(adj_cartera + adj_aux + adj_ramos + adj_crec, 3)
 
     return {
         "ejercicio": ejercicio,
-
-        # Métricas financieras
         "financiero": {
-            "comision_bruta":  round(comision_bruta, 2),
-            "ebitda":          round(ebitda, 2),
-            "margen_pct":      margen_pct,
-            "ratio_cesion_pct": ratio_cesion,
-            "n_recibos":       n_recibos,
+            "comision_bruta":      round(comision_bruta, 2),
+            "ebitda":              round(ebitda, 2),
+            "margen_pct":          total_pl["margen_pct"],
+            "ratio_cesion_pct":    total_pl["ratio_cesion_pct"],
+            "n_recibos":           n_recibos,
             "comision_por_recibo": round(comision_bruta / n_recibos, 2) if n_recibos else 0,
         },
-
-        # Perfil de cartera
         "perfil": {
-            "cartera_pct":       cart_pct,
-            "np_pct":            np_pct,
-            "ramo_premium_pct":  ramo_premium_pct,
-            "top3_aux_pct":      top3_aux_pct,
-            "top4_aux_pct":      top4_aux_pct,
-            "top3_comp_pct":     top3_comp_pct,
-            "n_auxiliares":      n_auxiliares,
-            "n_companias":       n_companias,
-            "top3_aux_names":    top3_aux_names,
-            "top4_aux_names":    top4_aux_names,
-            "top3_comp_names":   top3_comp_names,
-            "top3_ramos":        top3_ramos,
-            "aux_detail":        aux_detail,
-            "ramos_detail":      ramos_detail,
-            "umbral_premium_siguiente":   umbral_premium_sig,
-            "ingreso_premium_faltante":   ing_premium_faltante,
-            "ingreso_premium_actual":     round(ing_premium, 2),
+            "cartera_pct": cart_pct,
+            "np_pct":      np_pct,
+            "ramo_premium_pct": ramos["ramo_premium_pct"],
+            "top3_aux_pct":  aux["top3_aux_pct"],
+            "top4_aux_pct":  aux["top4_aux_pct"],
+            "top3_comp_pct": comp["top3_comp_pct"],
+            "n_auxiliares":  aux["n_auxiliares"],
+            "n_companias":   comp["n_companias"],
+            "top3_aux_names":  aux["top3_aux_names"],
+            "top4_aux_names":  aux["top4_aux_names"],
+            "top3_comp_names": comp["top3_comp_names"],
+            "top3_ramos":      ramos["top3_ramos"],
+            "aux_detail":      aux["aux_detail"],
+            "ramos_detail":    ramos["ramos_detail"],
+            "umbral_premium_siguiente": ramos["umbral_premium_siguiente"],
+            "ingreso_premium_faltante": ramos["ingreso_premium_faltante"],
+            "ingreso_premium_actual":   ramos["ingreso_premium_actual"],
         },
-
-        # Crecimiento histórico
-        "crecimiento": {
-            "cagr_5y":      cagr_5y,
-            "cagr_3y":      cagr_3y,
-            "cagr_usado":   round(cagr_ref, 4),
-            "cagr_periodo": "manual" if crecimiento_manual is not None
-                            else ("3 años" if cagr_3y is not None
-                                  else ("5 años" if cagr_5y is not None else "—")),
-            "manual":       crecimiento_manual is not None,
-            "historico":    [{"ejercicio": e, "ingresos": round(v, 2)} for e, v in hist_sorted],
-        },
-
-        # Ajustes
+        "crecimiento": crec,
         "ajustes": {
             "cartera":       {"valor": adj_cartera, "desc": "Calidad cartera recurrente",
                               "referencia": f"Cartera {cart_pct}% del total"},
             "concentracion": {"valor": adj_aux, "desc": "Concentración auxiliares",
-                              "referencia": f"Top 3 auxiliares = {top3_aux_pct}%"},
+                              "referencia": f"Top 3 auxiliares = {aux['top3_aux_pct']}%"},
             "ramos":         {"valor": adj_ramos, "desc": "Mix de ramos premium",
-                              "referencia": f"Ramos premium = {ramo_premium_pct}%"},
+                              "referencia": f"Ramos premium = {ramos['ramo_premium_pct']}%"},
             "crecimiento":   {"valor": adj_crec, "desc": "Tendencia de crecimiento",
                               "referencia": f"CAGR {round(cagr_ref*100,1)}%"},
             "total":         adj_total,
         },
-
-        # Valoraciones
-        "valoracion": {
-            "comisiones": {
-                "pesimista":  _val_com("pesimista"),
-                "base":       _val_com("base"),
-                "optimista":  _val_com("optimista"),
-            },
-            "ebitda": {
-                "pesimista":  _val_ebit("pesimista"),
-                "base":       _val_ebit("base"),
-                "optimista":  _val_ebit("optimista"),
-            },
-            "combinado":      val_combinado,
-        },
-
-        # Referencias de mercado
+        "valoracion": _valoraciones(comision_bruta, ebitda, adj_total),
         "mercado": {
             "multiples_comisiones": _MULT_COM,
             "multiples_ebitda":     _MULT_EBIT,

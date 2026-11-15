@@ -33,6 +33,8 @@ NOTA: comision_bruta_total, margen_neto_total y margen_pct_medio del resumen
 usan los totales globales de fact_resultado_analitico para garantizar
 identidad exacta con el modelo analítico.
 """
+from dataclasses import dataclass
+
 from sqlalchemy import text as _text
 from sqlalchemy.orm import Session
 
@@ -75,34 +77,50 @@ _SQL_POR_TOMADOR = """
 """
 
 
-def calcular_rentabilidad_clientes(
-    db: Session,
-    ejercicio: int,
-    min_comision: float = MIN_COMISION_DEFAULT,
-    tasa_cesion_estimada: float | None = None,
-) -> dict:
+@dataclass
+class _Totales:
+    """Totales globales del ejercicio sobre fact_resultado_analitico (cuadran con el analítico)."""
+    ing: float               # comisión bruta total
+    filas: list              # (tipo_cuenta, naturaleza, numero_cuenta, total)
+    ing_con_auxiliar: float
+    ces: float               # cesión real: 623* de recibos con auxiliar e ingreso en el ejercicio
+    cop: float               # costes operativos
+    mkt: float               # marketing
+    sin_mapear: float
+    ind: float               # cop + mkt
+    ebitda: float
 
-    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
 
-    # ── 1. Totales globales del ejercicio ────────────────────────────────────
+@dataclass
+class _Reparto:
+    """Lo necesario para repartir costes y cesiones entre clientes."""
+    base_reparto: float
+    ces_directo_clamped: dict
+    pools: tuple             # (pool_recibos, pool_polizas, pool_cn)
+    meta: dict
+    total_recibos: int
+    total_polizas: float
+    total_cn_directo: float
+    ces_est_tomador: dict
+
+
+def _totales_globales(db: Session, ejercicio: int) -> _Totales | None:
     # SQL idéntico al de dashboard_ejecutivo (modelo analítico) para garantizar
     # que comision_bruta_total cuadra exactamente con lo que muestra el modelo.
     # r[0]=tipo_cuenta  r[1]=naturaleza  r[2]=total
-    _pl_rows = _q(db, """
+    pl_rows = _q(db, """
         SELECT tipo_cuenta, naturaleza, COALESCE(SUM(CAST(importe AS FLOAT)),0)
         FROM fact_resultado_analitico
         WHERE ejercicio = :ej
         GROUP BY tipo_cuenta, naturaleza
     """, ej=ejercicio)
-
-    if not _pl_rows:
-        return {"sin_datos": True}
-
-    total_ing_global = sum(float(r[2]) for r in _pl_rows if r[0] == 'ingreso')
+    if not pl_rows:
+        return None
+    total_ing = sum(float(r[2]) for r in pl_rows if r[0] == 'ingreso')
 
     # Segunda query con numero_cuenta: necesaria para detectar cuentas 623* en costes
     # r[0]=tipo_cuenta  r[1]=naturaleza  r[2]=numero_cuenta  r[3]=total
-    global_rows = _q(db, """
+    filas = _q(db, """
         SELECT tipo_cuenta, naturaleza, numero_cuenta, COALESCE(SUM(CAST(importe AS FLOAT)), 0)
         FROM fact_resultado_analitico
         WHERE ejercicio = :ej
@@ -111,7 +129,7 @@ def calcular_rentabilidad_clientes(
 
     # Cesión real = cuenta 623* SOLO de recibos con auxiliar (ente IS NOT NULL)
     # que además tienen ingreso en el ejercicio. Requiere subquery sobre recibos.
-    _aux_stat = _q(db, """
+    aux_stat = _q(db, """
         WITH recibos_con_aux AS (
             SELECT r.id
             FROM recibos r
@@ -127,36 +145,32 @@ def calcular_rentabilidad_clientes(
         FROM fact_resultado_analitico f
         WHERE f.ejercicio = :ej AND f.recibo_id IS NOT NULL
     """, ej=ejercicio)
-    ing_con_auxiliar = round(float(_aux_stat[0][0]), 2) if _aux_stat else 0.0
-    total_ces_global  = round(float(_aux_stat[0][1]), 2) if _aux_stat else 0.0
-    total_cop_global = sum(-float(r[3]) for r in global_rows
-                           if r[0] == 'gasto' and r[1] in NATURALEZAS_COSTE_OP)
-    total_mkt_global = sum(-float(r[3]) for r in global_rows if r[1] == 'Marketing')
-    total_sin_mapear_global = sum(-float(r[3]) for r in global_rows
-                                  if r[0] == 'gasto' and r[1] is None)
-    total_ind_global = total_cop_global + total_mkt_global
+    ing_con_auxiliar = round(float(aux_stat[0][0]), 2) if aux_stat else 0.0
+    total_ces = round(float(aux_stat[0][1]), 2) if aux_stat else 0.0
+    total_cop = sum(-float(r[3]) for r in filas if r[0] == 'gasto' and r[1] in NATURALEZAS_COSTE_OP)
+    total_mkt = sum(-float(r[3]) for r in filas if r[1] == 'Marketing')
+    total_sin_mapear = sum(-float(r[3]) for r in filas if r[0] == 'gasto' and r[1] is None)
+    total_ind = total_cop + total_mkt
+    ebitda = round(total_ing - total_ces - total_ind - total_sin_mapear, 2)
+    return _Totales(total_ing, filas, ing_con_auxiliar, total_ces, total_cop, total_mkt,
+                    total_sin_mapear, total_ind, ebitda)
 
-    ebitda_esperado = round(
-        total_ing_global - total_ces_global - total_ind_global - total_sin_mapear_global, 2
-    )
 
-    # ── 2. P&L de las filas CON recibo_id agrupadas por tomador ──────────────
-    por_tomador_rows = _q(db, _SQL_POR_TOMADOR, ej=ejercicio)
-
+def _ingreso_y_cesion_por_tomador(db: Session, ejercicio: int) -> tuple[dict, dict]:
+    """P&L de las filas CON recibo_id agrupadas por tomador: (ingreso directo, cesión 623)."""
     ing_directo: dict[str, float] = {}
-    ces_directo: dict[str, float] = {}
-
-    for r in por_tomador_rows:
+    for r in _q(db, _SQL_POR_TOMADOR, ej=ejercicio):
         tomador, tipo, total = r[0], r[1], float(r[5])
         if tipo == 'ingreso':
             ing_directo[tomador] = ing_directo.get(tomador, 0.0) + total
         # 623 sin auxiliar (ente IS NULL) y 640/642: ignorados
 
     # Cesión 623 por tomador: SOLO de recibos con ingreso en el ejercicio, mismo criterio
-    # que total_ces_global. La 623 pagada en el año sobre recibos de años anteriores (la
+    # que la cesión global. La 623 pagada en el año sobre recibos de años anteriores (la
     # cesión se paga con ~1 año de retraso) es de otro ejercicio: contarla aquí y además
     # estimar la de los recibos del año cargaba al cliente dos cesiones en un año
     # (detectado 2026-10-27 con PARTICIPACIONES PROYECTOS INMOBILIARIOS S.L.).
+    ces_directo: dict[str, float] = {}
     for r in _q(db, """
         SELECT r.tomador, COALESCE(SUM(-CAST(f.importe AS FLOAT)), 0)
         FROM fact_resultado_analitico f
@@ -173,36 +187,20 @@ def calcular_rentabilidad_clientes(
         GROUP BY r.tomador
     """, ej=ejercicio):
         ces_directo[r[0]] = float(r[1])
+    return ing_directo, ces_directo
 
-    if not ing_directo:
-        return {"sin_datos": True}
 
-    # ── 3. Fracciones no atribuibles + pools de costes por driver ────────────
-    total_ing_directo = sum(ing_directo.values())
+def _pools_por_driver(filas: list) -> tuple[float, float, float]:
+    """Costes por driver (respeta DRIVERS_DEFAULT del analítico): (RECIBOS, POLIZAS, COMISION_NETA).
 
-    # Clamp cesión directa a >= 0: reversiones que superan la cesión original no
-    # tienen sentido de negocio (el auxiliar no puede cobrar negativo al cliente).
-    ces_directo_clamped: dict[str, float] = {t: max(0.0, v) for t, v in ces_directo.items()}
-    total_ces_directo = sum(ces_directo_clamped.values())
-
-    ing_sin_recibo = max(0.0, total_ing_global - total_ing_directo)
-
-    # ces_ajuste puede ser negativo (reversiones en recibos sin tomador).
-    # Permitirlo negativo elimina la diferencia ebitda_esperado vs suma de clientes.
-    ces_ajuste = total_ces_global - total_ces_directo
-
-    base_reparto = total_ing_directo if total_ing_directo > 0 else 1.0
-
-    # Pools de costes desglosados por driver (respeta DRIVERS_DEFAULT del analítico):
-    #   POLIZAS       → Personal, Servicios profesionales, Comunicaciones
-    #   RECIBOS       → Tecnología, Bancos
-    #   COMISION_NETA → Alquiler, Financiero, Viajes, Impuestos, Seguros, Suministros
-    #   NUEVA_PRODUCCION (Marketing) → sin info NP por tomador, fallback a RECIBOS
-    pool_recibos = 0.0   # costes que usan driver RECIBOS o NUEVA_PRODUCCION
-    pool_polizas = 0.0   # costes que usan driver POLIZAS
-    pool_cn      = 0.0   # costes que usan driver COMISION_NETA
-    for r in global_rows:
-        tipo, nat, _ncuenta, val = r[0], r[1], r[2], float(r[3])
+    POLIZAS       → Personal, Servicios profesionales, Comunicaciones
+    RECIBOS       → Tecnología, Bancos
+    COMISION_NETA → Alquiler, Financiero, Viajes, Impuestos, Seguros, Suministros
+    NUEVA_PRODUCCION (Marketing) → sin info NP por tomador, fallback a RECIBOS
+    """
+    pool_recibos = pool_polizas = pool_cn = 0.0
+    for r in filas:
+        tipo, nat, val = r[0], r[1], float(r[3])
         # Resultado financiero (intereses 66*) queda debajo del EBITDA: fuera de los pools.
         if tipo == 'gasto' and nat and nat not in ('Cesión auxiliar', NATURALEZA_RESULTADO_FINANCIERO):
             cost = -val
@@ -213,9 +211,12 @@ def calcular_rentabilidad_clientes(
                 pool_polizas += cost
             else:
                 pool_recibos += cost
+    return pool_recibos, pool_polizas, pool_cn
 
-    # ── 4. Metadatos de los recibos (prima, ramos, compañías, auxiliar) ───────
-    meta_rows = _q(db, """
+
+def _metadatos_por_tomador(db: Session, ejercicio: int) -> dict[str, dict]:
+    """Prima, recibos, pólizas ponderadas, ramos, compañías y auxiliares de cada tomador."""
+    filas = _q(db, """
         SELECT
             r.tomador,
             COUNT(*)                                                         AS n_recibos,
@@ -241,8 +242,7 @@ def calcular_rentabilidad_clientes(
         WHERE r.tomador IS NOT NULL AND r.tomador != ''
         GROUP BY r.tomador
     """, ej=ejercicio, peso_int=PESO_POLIZA_INTERMEDIADA)
-
-    meta: dict[str, dict] = {
+    return {
         r[0]: {
             "n_recibos":   int(r[1]),
             "prima_total": float(r[2]),
@@ -253,27 +253,16 @@ def calcular_rentabilidad_clientes(
             "companias":   r[7] or "",
             "auxiliares":  r[8] or "",
         }
-        for r in meta_rows
+        for r in filas
     }
 
-    # ── Bases de reparto para drivers ────────────────────────────────────────
-    # RECIBOS: total de recibos con tomador identificado
-    total_recibos_con_tomador = sum(m["n_recibos"] for m in meta.values())
-    # POLIZAS: total de pólizas con tomador identificado
-    total_polizas_con_tomador = sum(m["n_polizas"] for m in meta.values())
 
-    # COMISION_NETA: sum de comisión neta directa por tomador (pre-cesión-ajuste)
-    # Usamos ing_dir - ces_directo_clamped como proxy de comisión neta directa;
-    # los pesos se normalizan sobre este total para que sumen 1 exacto.
-    total_cn_directo = sum(
-        max(0.0, ing - ces_directo_clamped.get(t, 0.0))
-        for t, ing in ing_directo.items()
-    )
+def _cesion_estimada_por_tomador(db: Session, ejercicio: int, tasa: float) -> tuple[dict, dict]:
+    """Recibos con auxiliar y sin apunte 623*: (cesión estimada, ingreso base) por tomador.
 
-    # ── 5a. Cesión estimada — recibos con auxiliar y sin apunte en cuenta 623* ──
-    ces_est_tomador: dict[str, float] = {}
-    ing_est_tomador: dict[str, float] = {}
-    _ces_rows = _q(db, """
+    Cada recibo con la tasa real de su auxiliar (tasa = respaldo, ver tasa_cesion.py).
+    """
+    filas = _q(db, """
         WITH recibos_sin_cesion AS (
             SELECT r.id AS recibo_id
             FROM recibos r
@@ -302,113 +291,102 @@ def calcular_rentabilidad_clientes(
           AND f.tipo_cuenta = 'ingreso'
           AND rec.tomador IS NOT NULL
         GROUP BY rec.tomador
-    """, ej=ejercicio, tasa=tasa_cesion_estimada)
-    # Cada recibo con la tasa real de su auxiliar (tasa = respaldo, ver tasa_cesion.py)
-    ces_est_tomador = {r[0]: round(float(r[1]), 2) for r in _ces_rows if r[0]}
-    ing_est_tomador = {r[0]: float(r[2]) for r in _ces_rows if r[0]}
+    """, ej=ejercicio, tasa=tasa)
+    ces_est = {r[0]: round(float(r[1]), 2) for r in filas if r[0]}
+    ing_est = {r[0]: float(r[2]) for r in filas if r[0]}
+    return ces_est, ing_est
 
-    # ── 5. Construir resultado por cliente ────────────────────────────────────
-    clientes_raw = []
-    for tomador, ing_dir in ing_directo.items():
-        peso = ing_dir / base_reparto
 
-        ingreso_bruto = round(ing_dir, 2)
-        cesion = max(0.0, round(ces_directo_clamped.get(tomador, 0.0), 2))
+def _fila_cliente(tomador: str, ing_dir: float, rep: _Reparto) -> dict:
+    """P&L de un cliente: costes repartidos con el driver de cada naturaleza y cesión estimada."""
+    peso = ing_dir / rep.base_reparto
+    ingreso_bruto = round(ing_dir, 2)
+    cesion = max(0.0, round(rep.ces_directo_clamped.get(tomador, 0.0), 2))
+    m = rep.meta.get(tomador, {})
 
-        # Peso RECIBOS: proporcional a número de recibos del tomador
-        n_rec = meta.get(tomador, {}).get("n_recibos", 0)
-        peso_rec = n_rec / total_recibos_con_tomador if total_recibos_con_tomador > 0 else peso
+    # Peso RECIBOS / POLIZAS: proporcional a recibos / pólizas del tomador
+    n_rec = m.get("n_recibos", 0)
+    peso_rec = n_rec / rep.total_recibos if rep.total_recibos > 0 else peso
+    n_pol = m.get("n_polizas", 0)
+    peso_pol = n_pol / rep.total_polizas if rep.total_polizas > 0 else peso
+    # Peso COMISION_NETA: proporcional a comisión neta directa del tomador
+    cn_dir = max(0.0, ing_dir - rep.ces_directo_clamped.get(tomador, 0.0))
+    peso_cn_local = cn_dir / rep.total_cn_directo if rep.total_cn_directo > 0 else peso
 
-        # Peso POLIZAS: proporcional a número de pólizas del tomador
-        n_pol = meta.get(tomador, {}).get("n_polizas", 0)
-        peso_pol = n_pol / total_polizas_con_tomador if total_polizas_con_tomador > 0 else peso
+    pool_recibos, pool_polizas, pool_cn = rep.pools
+    costes_ind = round(pool_recibos * peso_rec + pool_polizas * peso_pol + pool_cn * peso_cn_local, 2)
 
-        # Peso COMISION_NETA: proporcional a comisión neta directa del tomador
-        cn_dir = max(0.0, ing_dir - ces_directo_clamped.get(tomador, 0.0))
-        peso_cn_local = cn_dir / total_cn_directo if total_cn_directo > 0 else peso
+    comision_neta = round(ingreso_bruto - cesion, 2)
+    margen_neto = round(comision_neta - costes_ind, 2)
+    margen_pct = round(margen_neto / ingreso_bruto * 100, 2) if ingreso_bruto > 0 else 0.0
+    clase = _clase(margen_pct)
 
-        # Costes distribuidos con el driver correcto por naturaleza
-        costes_ind = round(pool_recibos * peso_rec + pool_polizas * peso_pol + pool_cn * peso_cn_local, 2)
-        costes_op  = costes_ind  # agrupado (pool_recibos incluye mkt, ya no se separa)
-        costes_mkt = 0.0
+    # Cesión estimada: misma regla que todos los dashboards
+    # (recibos del cliente con auxiliar y sin 623* directa)
+    cesion_estimada = rep.ces_est_tomador.get(tomador, 0.0)
+    tiene_cesion_estimada = cesion_estimada > 0.01
+    margen_neto_estimado = round(margen_neto - cesion_estimada, 2)
+    margen_pct_estimado = round(margen_neto_estimado / ingreso_bruto * 100, 2) if ingreso_bruto > 0 else 0.0
 
-        comision_neta = round(ingreso_bruto - cesion, 2)
-        margen_neto   = round(comision_neta - costes_ind, 2)
-        margen_pct    = round(margen_neto / ingreso_bruto * 100, 2) if ingreso_bruto > 0 else 0.0
-        clase         = _clase(margen_pct)
+    return {
+        "tomador":               tomador,
+        "n_recibos":             m.get("n_recibos", 0),
+        "n_ramos":               m.get("n_ramos", 0),
+        "n_companias":           m.get("n_companias", 0),
+        "ramos":                 m.get("ramos", ""),
+        "companias":             m.get("companias", ""),
+        "auxiliares":            m.get("auxiliares", ""),
+        "prima_total":           round(m.get("prima_total", 0.0), 2),
+        "ingreso_bruto":         ingreso_bruto,
+        "cesion_directa":        cesion,
+        "comision_neta":         comision_neta,
+        "costes_op":             costes_ind,  # agrupado (pool_recibos incluye mkt, ya no se separa)
+        "costes_mkt":            0.0,
+        "costes_imputados":      costes_ind,
+        "margen_neto":           margen_neto,
+        "margen_pct":            margen_pct,
+        "clase":                 clase,
+        # Estimación
+        "cesion_estimada":       cesion_estimada,
+        "tiene_cesion_estimada": tiene_cesion_estimada,
+        "margen_neto_estimado":  margen_neto_estimado,
+        "margen_pct_estimado":   margen_pct_estimado,
+        "clase_estimada":        _clase(margen_pct_estimado) if tiene_cesion_estimada else clase,
+    }
 
-        m = meta.get(tomador, {})
-        tiene_aux = bool(m.get("auxiliares", ""))
 
-        # Cesión estimada: misma regla que todos los dashboards
-        # (recibos del cliente con auxiliar y sin 623* directa)
-        cesion_estimada = ces_est_tomador.get(tomador, 0.0)
-        tiene_cesion_estimada = cesion_estimada > 0.01
+def _fila_sin_cliente(ing_sin_recibo: float, ces_ajuste: float) -> dict:
+    """Ingresos sin recibo vinculado: cliente virtual al final de la lista."""
+    ces = max(0.0, round(ces_ajuste, 2))
+    mgn = round(ing_sin_recibo - ces, 2)
+    mpct = round(mgn / ing_sin_recibo * 100, 2) if ing_sin_recibo > 0 else 0.0
+    return {
+        "tomador":               "__SIN_CLIENTE__",
+        "n_recibos":             0,
+        "n_ramos":               0,
+        "n_companias":           0,
+        "ramos":                 "",
+        "companias":             "",
+        "auxiliares":            "",
+        "prima_total":           0.0,
+        "ingreso_bruto":         round(ing_sin_recibo, 2),
+        "cesion_directa":        ces,
+        "comision_neta":         round(ing_sin_recibo - ces, 2),
+        "costes_op":             0.0,
+        "costes_mkt":            0.0,
+        "costes_imputados":      0.0,
+        "margen_neto":           mgn,
+        "margen_pct":            mpct,
+        "clase":                 "D",
+        "cesion_estimada":       0.0,
+        "tiene_cesion_estimada": False,
+        "margen_neto_estimado":  mgn,
+        "margen_pct_estimado":   mpct,
+        "clase_estimada":        "D",
+    }
 
-        margen_neto_estimado = round(margen_neto - cesion_estimada, 2)
-        margen_pct_estimado  = round(margen_neto_estimado / ingreso_bruto * 100, 2) if ingreso_bruto > 0 else 0.0
-        clase_estimada       = _clase(margen_pct_estimado) if tiene_cesion_estimada else clase
 
-        clientes_raw.append({
-            "tomador":               tomador,
-            "n_recibos":             m.get("n_recibos", 0),
-            "n_ramos":               m.get("n_ramos", 0),
-            "n_companias":           m.get("n_companias", 0),
-            "ramos":                 m.get("ramos", ""),
-            "companias":             m.get("companias", ""),
-            "auxiliares":            m.get("auxiliares", ""),
-            "prima_total":           round(m.get("prima_total", 0.0), 2),
-            "ingreso_bruto":         ingreso_bruto,
-            "cesion_directa":        cesion,
-            "comision_neta":         comision_neta,
-            "costes_op":             costes_op,
-            "costes_mkt":            costes_mkt,
-            "costes_imputados":      costes_ind,
-            "margen_neto":           margen_neto,
-            "margen_pct":            margen_pct,
-            "clase":                 clase,
-            # Estimación
-            "cesion_estimada":       cesion_estimada,
-            "tiene_cesion_estimada": tiene_cesion_estimada,
-            "margen_neto_estimado":  margen_neto_estimado,
-            "margen_pct_estimado":   margen_pct_estimado,
-            "clase_estimada":        clase_estimada,
-        })
-
-    clientes = [c for c in clientes_raw if c["ingreso_bruto"] >= min_comision]
-    clientes.sort(key=lambda x: -x["margen_neto"])
-
-    # Ingresos sin recibo vinculado: cliente virtual al final de la lista
-    if ing_sin_recibo > 0.01:
-        sin_cli_ces  = max(0.0, round(ces_ajuste, 2))
-        sin_cli_mgn  = round(ing_sin_recibo - sin_cli_ces, 2)
-        sin_cli_mpct = round(sin_cli_mgn / ing_sin_recibo * 100, 2) if ing_sin_recibo > 0 else 0.0
-        clientes.append({
-            "tomador":               "__SIN_CLIENTE__",
-            "n_recibos":             0,
-            "n_ramos":               0,
-            "n_companias":           0,
-            "ramos":                 "",
-            "companias":             "",
-            "auxiliares":            "",
-            "prima_total":           0.0,
-            "ingreso_bruto":         round(ing_sin_recibo, 2),
-            "cesion_directa":        sin_cli_ces,
-            "comision_neta":         round(ing_sin_recibo - sin_cli_ces, 2),
-            "costes_op":             0.0,
-            "costes_mkt":            0.0,
-            "costes_imputados":      0.0,
-            "margen_neto":           sin_cli_mgn,
-            "margen_pct":            sin_cli_mpct,
-            "clase":                 "D",
-            "cesion_estimada":       0.0,
-            "tiene_cesion_estimada": False,
-            "margen_neto_estimado":  sin_cli_mgn,
-            "margen_pct_estimado":   sin_cli_mpct,
-            "clase_estimada":        "D",
-        })
-
-    # ── 6. Resumen ────────────────────────────────────────────────────────────
+def _resumen(clientes: list[dict], tot: _Totales, ing_est_tomador: dict) -> dict:
     # Contar por clase EFECTIVA (la estimada si tiene estimación, la real si no),
     # igual que lo que muestra la tabla y aplican los filtros del frontend.
     # El cliente virtual __SIN_CLIENTE__ no cuenta como cliente real.
@@ -419,8 +397,7 @@ def calcular_rentabilidad_clientes(
         clase_ef = c["clase_estimada"] if c["tiene_cesion_estimada"] else c["clase"]
         por_clase[clase_ef] += 1
 
-    cobertura_pct = round(sum(c["ingreso_bruto"] for c in clientes) / total_ing_global * 100, 1) \
-        if total_ing_global > 0 else 0.0
+    cobertura_pct = round(sum(c["ingreso_bruto"] for c in clientes) / tot.ing * 100, 1) if tot.ing > 0 else 0.0
 
     # Estimación global
     total_cesion_estimada = round(sum(c["cesion_estimada"] for c in clientes), 2)
@@ -433,52 +410,102 @@ def calcular_rentabilidad_clientes(
 
     # Suma de per-client (para verificación de cuadre, puede diferir en centavos por redondeo)
     ebitda_calculado = round(sum(c["margen_neto"] for c in clientes), 2)
-
     # cesión normalizada = cesión real contable + estimada devengada
-    ces_normalizada_total = round(total_ces_global + total_cesion_estimada, 2)
-
+    ces_normalizada_total = round(tot.ces + total_cesion_estimada, 2)
     # Margen normalizado: igual que ebitda_esperado pero con ces_norm en lugar de ces_real
     # ebitda_normalizado = bruta - ces_norm - cop - mkt - sin_mapear = ebitda_esperado - ces_estimada
-    margen_neto_normalizado = round(ebitda_esperado - total_cesion_estimada, 2)
-    margen_pct_normalizado  = round(margen_neto_normalizado / total_ing_global * 100, 2) if total_ing_global else 0.0
+    margen_neto_normalizado = round(tot.ebitda - total_cesion_estimada, 2)
+    margen_pct_normalizado = round(margen_neto_normalizado / tot.ing * 100, 2) if tot.ing else 0.0
 
     return {
-        "ejercicio":              ejercicio,
+        "n_clientes":                  sum(1 for c in clientes if c["tomador"] != "__SIN_CLIENTE__"),
+        "por_clase":                   por_clase,
+        # Valores globales — idénticos al modelo analítico
+        "comision_bruta_total":        round(tot.ing, 2),
+        "cesion_total":                round(tot.ces, 2),
+        "costes_total":                round(tot.cop, 2),
+        "mkt_total":                   round(tot.mkt, 2),
+        "sin_mapear_total":            round(tot.sin_mapear, 2),
+        "margen_neto_total":           tot.ebitda,
+        "margen_pct_medio":            round(tot.ebitda / tot.ing * 100, 2) if tot.ing > 0 else 0.0,
+        "margen_neto_normalizado":     margen_neto_normalizado,
+        "margen_pct_normalizado":      margen_pct_normalizado,
+        # Estimación + cuadre con modelo analítico
+        "n_con_cesion_estimada":       n_con_cesion_estimada,
+        "cesion_estimada_total":       total_cesion_estimada,
+        "ces_normalizada_total":       ces_normalizada_total,
+        # Desglose para tabla de cesión
+        "ing_con_auxiliar":            tot.ing_con_auxiliar,
+        "ing_estimado_base":           ing_estimado_base,
+        # Verificación de cuadre
+        "cobertura_pct":               cobertura_pct,
+        "comision_analitico_total":    round(tot.ing, 2),
+        "ebitda_esperado":             tot.ebitda,
+        "ebitda_calculado":            ebitda_calculado,
+    }
+
+
+def calcular_rentabilidad_clientes(
+    db: Session,
+    ejercicio: int,
+    min_comision: float = MIN_COMISION_DEFAULT,
+    tasa_cesion_estimada: float | None = None,
+) -> dict:
+    """P&L por cliente (ver docstring del módulo). Orquesta los pasos; cada uno en su función."""
+    tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
+
+    # 1. Totales globales del ejercicio
+    tot = _totales_globales(db, ejercicio)
+    if tot is None:
+        return {"sin_datos": True}
+
+    # 2. Ingreso y cesión directos por tomador
+    ing_directo, ces_directo = _ingreso_y_cesion_por_tomador(db, ejercicio)
+    if not ing_directo:
+        return {"sin_datos": True}
+
+    # 3. Fracciones no atribuibles. Clamp de la cesión directa a >= 0: reversiones que
+    #    superan la cesión original no tienen sentido de negocio (el auxiliar no puede
+    #    cobrar negativo al cliente). ces_ajuste sí puede ser negativo (reversiones en
+    #    recibos sin tomador): permitirlo elimina la diferencia ebitda_esperado vs clientes.
+    total_ing_directo = sum(ing_directo.values())
+    ces_directo_clamped = {t: max(0.0, v) for t, v in ces_directo.items()}
+    ing_sin_recibo = max(0.0, tot.ing - total_ing_directo)
+    ces_ajuste = tot.ces - sum(ces_directo_clamped.values())
+
+    # 4. Metadatos y bases de reparto. COMISION_NETA: ing_dir - cesión directa como proxy
+    #    de la comisión neta; los pesos se normalizan sobre este total para que sumen 1.
+    meta = _metadatos_por_tomador(db, ejercicio)
+    rep = _Reparto(
+        base_reparto=total_ing_directo if total_ing_directo > 0 else 1.0,
+        ces_directo_clamped=ces_directo_clamped,
+        pools=_pools_por_driver(tot.filas),
+        meta=meta,
+        total_recibos=sum(m["n_recibos"] for m in meta.values()),
+        total_polizas=sum(m["n_polizas"] for m in meta.values()),
+        total_cn_directo=sum(max(0.0, ing - ces_directo_clamped.get(t, 0.0)) for t, ing in ing_directo.items()),
+        ces_est_tomador={},
+    )
+
+    # 5. Cesión estimada (recibos con auxiliar sin 623*) y fila de cada cliente
+    rep.ces_est_tomador, ing_est_tomador = _cesion_estimada_por_tomador(db, ejercicio, tasa_cesion_estimada)
+    clientes = [f for f in (_fila_cliente(t, ing, rep) for t, ing in ing_directo.items())
+                if f["ingreso_bruto"] >= min_comision]
+    clientes.sort(key=lambda x: -x["margen_neto"])
+    if ing_sin_recibo > 0.01:
+        clientes.append(_fila_sin_cliente(ing_sin_recibo, ces_ajuste))
+
+    # 6. Resumen
+    return {
+        "ejercicio":             ejercicio,
         "min_comision":          min_comision,
         "tasa_cesion_estimada":  tasa_cesion_estimada,
-        "resumen": {
-            "n_clientes":                  sum(1 for c in clientes if c["tomador"] != "__SIN_CLIENTE__"),
-            "por_clase":                   por_clase,
-            # Valores globales — idénticos al modelo analítico
-            "comision_bruta_total":        round(total_ing_global, 2),
-            "cesion_total":                round(total_ces_global, 2),
-            "costes_total":                round(total_cop_global, 2),
-            "mkt_total":                   round(total_mkt_global, 2),
-            "sin_mapear_total":            round(total_sin_mapear_global, 2),
-            "margen_neto_total":           ebitda_esperado,
-            "margen_pct_medio":            round(
-                ebitda_esperado / total_ing_global * 100, 2
-            ) if total_ing_global > 0 else 0.0,
-            "margen_neto_normalizado":     margen_neto_normalizado,
-            "margen_pct_normalizado":      margen_pct_normalizado,
-            # Estimación + cuadre con modelo analítico
-            "n_con_cesion_estimada":       n_con_cesion_estimada,
-            "cesion_estimada_total":       total_cesion_estimada,
-            "ces_normalizada_total":       ces_normalizada_total,
-            # Desglose para tabla de cesión
-            "ing_con_auxiliar":            ing_con_auxiliar,
-            "ing_estimado_base":           ing_estimado_base,
-            # Verificación de cuadre
-            "cobertura_pct":               cobertura_pct,
-            "comision_analitico_total":    round(total_ing_global, 2),
-            "ebitda_esperado":             ebitda_esperado,
-            "ebitda_calculado":            ebitda_calculado,
-        },
+        "resumen":               _resumen(clientes, tot, ing_est_tomador),
         "pool_costes": {
-            "cesion_analitico": round(total_ces_global, 2),
-            "costes_op":        round(total_cop_global, 2),
-            "mkt":              round(total_mkt_global, 2),
-            "total_indirecto":  round(total_ind_global, 2),
+            "cesion_analitico": round(tot.ces, 2),
+            "costes_op":        round(tot.cop, 2),
+            "mkt":              round(tot.mkt, 2),
+            "total_indirecto":  round(tot.ind, 2),
         },
         "clientes": clientes,
         "top20":    clientes[:20],

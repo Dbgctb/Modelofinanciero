@@ -48,7 +48,45 @@
 
 **Volver atrás:** `alembic stamp` no cambió datos; para deshacer del todo, restaurar el `.dump` anterior con `pg_restore` y volver al commit previo.
 
-**Pendiente:** fases 4 y 5 (S4: react-router v7, PyJWT y FastAPI; Q3), S7, S8, D4 y los avisos de Ruff/ESLint. `pip-audit` no ejecutado.
+## Estado tras la fase 4 — dependencias (2026-11-15)
+
+**Resultado: 0 vulnerabilidades conocidas** en backend (`pip-audit`, antes 29 en 4 paquetes) y frontend (`npm audit`, antes 14 + 6 nuevas de ESLint).
+
+| Cambio | Motivo | Verificación |
+|---|---|---|
+| `python-jose` → **PyJWT 2.15.1** | jose tenía una vulnerabilidad sin arreglo y traía `pyasn1` (8 vulns) y `ecdsa` (1, sin arreglo) | Test: un token emitido por jose se sigue leyendo; tokens caducados/manipulados rechazados |
+| `passlib` → **bcrypt 5.0.0** directo | passlib sin mantenimiento desde 2020 | Tests con hashes reales de passlib (corto y de 100 caracteres, truncado a 72 bytes como passlib); los 2 hashes de la base tienen formato válido; login real OK |
+| FastAPI 0.115 → **0.163.1**, starlette 0.46 → **1.10.0**, pydantic 2.7 → **2.14.3**, pydantic-settings → 2.16.3 | starlette tenía 7 vulnerabilidades (arreglo ≥ 1.3.1) | 447 tests; batería en vivo 31/31; flujo de sesión 7/7 |
+| react-router-dom 6 → **7.18.5** | Redirección abierta (moderada) | Sin rutas comodín relativas ni navegación relativa; `tsc`, build y `vite preview` OK |
+| vite 5 → **6.4.6**, plugin-react 4.7.0 | 8 avisos de vite/esbuild (uno alto) hasta 6.4.3: no hace falta la v8 | Build y `vite preview` (rutas SPA, bundle y proxy `/api`) OK |
+| `overrides` de `minimatch` → 11.0.8 | DoS en la versión que traen las herramientas de ESLint | ESLint funciona igual |
+
+**Encontrado y corregido durante la fase:**
+- 🟡 `/openapi.json` (mapa completo de la API) era **público también en producción**; ahora solo existe en desarrollo, en `/api/openapi.json`.
+- Los tests de permisos dejaron de ver 204 de las 205 rutas con la FastAPI nueva (los routers incluidos ya no se copian a `app.routes`). Se reescribió la recogida de rutas para que **falle si aparece una estructura desconocida** en vez de saltarse rutas en silencio.
+- `class Config` de Pydantic (se elimina en Pydantic 3) → `model_config` en `config.py` y `kpis.py`.
+
+## Estado tras la fase 5 — refactor de funciones gigantes (primer bloque, 2026-11-15)
+
+**Método:** ningún cambio sin red. Antes de tocar cada función se capturó su salida exacta sobre la base real (*golden master*) y después del refactor se exigió salida **idéntica**; además se introdujeron fallos a propósito para confirmar que la red los detecta. Las funciones que escriben se ejecutaron en una transacción que se deshace siempre (verificado: las tablas no cambiaron).
+
+| Función | Antes | Después | Red de seguridad |
+|---|---|---|---|
+| `cross_selling.recalcular_cross_selling` | 437 líneas · complejidad 119 | 51 · 8 (+13 piezas) | 11 ejercicios, ~75.000 oportunidades y ~31.000 alertas idénticas |
+| `rentabilidad_cliente.calcular_rentabilidad_clientes` | 409 · 52 | 66 · 11 (+8 piezas) | 18 combinaciones de parámetros idénticas |
+| `analitico.calcular_valoracion` | 264 · 54 | 89 · 5 (+9 piezas) | 8 combinaciones idénticas |
+
+- Los factores de ajuste de la valoración, el reparto de costes, las señales de fuga, etc. son ahora funciones puras con **69 tests nuevos** en sus límites exactos (516 tests en total).
+- Herramientas para seguir: `backend/scripts/golden_lectura.py` y `backend/scripts/golden_cross_selling.py` (`capturar` antes / `comparar` después).
+- Quedan 32 funciones con complejidad > 20 (la mayor: `analitico._recalcular_worker`, 326 líneas). Q3 sigue siendo trabajo continuo.
+
+**Hallazgos durante el refactor (comportamiento conservado tal cual; pendientes de decisión):**
+- 🟠 **Valor protegido de las alertas de fuga con margen fijo del 15 %.** `_margenes_reales` lee de la rentabilidad las claves `'cliente'` y `'margen_pct_normalizado'`, que no existen (son `'tomador'` y `margen_pct`/`margen_pct_estimado`); el diccionario sale siempre vacío y un `except: pass` lo oculta. Afecta a `valor_protegido` y `prioridad` de todas las alertas. Corregirlo cambia esas cifras: hay que decidir qué margen usar.
+- 🟡 **Motivo de algunas oportunidades no reproducible.** Si dos ramos del cliente empatan en afinidad con el recomendado, el texto se elige según el orden de un conjunto de Python, que varía en cada proceso. Arreglo trivial (recorrer en orden alfabético), cambia textos.
+- 🟡 **`-0.0` en la cesión estimada** con tasa 0: PostgreSQL suma en orden no fijo y el signo del cero varía (la pantalla puede mostrar "-0,00 €").
+- La fórmula de percentiles de prima de cross-selling usa el índice `int(n·q) − 1` (p50 de 4 valores = el 2.º): se fija con un test, no se cambia.
+
+**Pendiente:** S7, S8, D4, los avisos de Ruff/ESLint, las decisiones anteriores y seguir con Q3.
 
 ## Resumen
 
