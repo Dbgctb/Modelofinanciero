@@ -53,6 +53,45 @@ def test_fortaleza_de_contrasena(clave, valida):
     assert security.validate_password_strength(clave) is valida
 
 
+# Generados con passlib 1.7.4 (la librería anterior) antes de cambiarla por bcrypt directo.
+HASH_PASSLIB_CORTA = "$2b$12$aYniFV/4aZkNWsR2uBPNluvNh1syjTWVSNs9olss7Hx7SUeYWV7vq"  # "Abcdefgh1!"
+HASH_PASSLIB_LARGA = "$2b$12$6Q8b.2ELTnxHlIh7hVkctOPW9c5.Va9VLSrUa5/Rh1Wlk1dm0nise"  # "Ab1!" + 96 "x"
+# Emitido por python-jose (HS256, clave de los tests, caduca en 2099) antes de cambiar a PyJWT.
+TOKEN_JOSE = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1MSIsInJvbGUiOiJhZG1pbiIsInR5cGUiOiJhY2Nlc3MiLCJl"
+              "eHAiOjQwNzA5MDg4MDB9.DKnRwXK7Or4P0wbAs9FUt5l__SMe2XSYAihxX4NpWR0")
+
+
+def test_hashes_guardados_con_passlib_siguen_validando():
+    assert security.verify_password("Abcdefgh1!", HASH_PASSLIB_CORTA)
+    assert not security.verify_password("Abcdefgh1?", HASH_PASSLIB_CORTA)
+    larga = "Ab1!" + "x" * 96
+    assert security.verify_password(larga, HASH_PASSLIB_LARGA)
+
+
+def test_contrasena_larga_se_trunca_a_72_bytes_como_passlib():
+    larga = "Ab1!" + "x" * 96
+    assert security.verify_password(larga[:72] + "OTRO_FINAL", HASH_PASSLIB_LARGA)  # igual que passlib
+    assert security.verify_password(larga, security.hash_password(larga))  # bcrypt 5 no lanza error
+
+
+def test_hash_mal_formado_no_valida_ni_falla():
+    assert security.verify_password("x", "no-es-un-hash") is False
+    assert security.verify_password("x", "") is False
+
+
+def test_tokens_emitidos_con_python_jose_siguen_siendo_validos():
+    payload = security.decode_token(TOKEN_JOSE)
+    assert payload["sub"] == "u1" and payload["type"] == "access"
+
+
+def test_token_caducado_se_rechaza():
+    import jwt
+    from datetime import datetime, timezone
+    caducado = jwt.encode({"sub": "u1", "type": "access", "exp": datetime(2020, 1, 1, tzinfo=timezone.utc)},
+                          security.settings.SECRET_KEY, algorithm="HS256")
+    assert security.decode_token(caducado) is None
+
+
 def test_hash_bcrypt_verifica_y_no_guarda_la_clave():
     h = security.hash_password("Abcdefgh1!")
     assert "Abcdefgh1!" not in h and h.startswith("$2b$12$")

@@ -1,15 +1,24 @@
-import warnings
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+"""Contraseñas (bcrypt) y tokens JWT (PyJWT).
+
+Auditoría, fase 4: se sustituyeron `passlib` (sin mantenimiento desde 2020) y `python-jose`
+(vulnerabilidad sin arreglo y dependencias pyasn1/ecdsa vulnerables) por `bcrypt` y `PyJWT`.
+Compatibilidad: los hashes guardados con passlib ($2b$12$…) y los tokens ya emitidos (HS256)
+siguen siendo válidos; lo comprueban los tests.
+"""
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+import bcrypt
+import jwt
+
 from .config import settings
 
-# Suppress passlib/bcrypt 4.x version-attribute incompatibility warning (cosmetic only)
-warnings.filterwarnings("ignore", ".*error reading bcrypt version.*")
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
+BCRYPT_RONDAS = 12
+# bcrypt solo usa los primeros 72 bytes de la contraseña. passlib los truncaba en silencio;
+# se hace igual para que las contraseñas largas ya guardadas sigan validando.
+_BCRYPT_MAX_BYTES = 72
 
 PASSWORD_REGEX = re.compile(
     r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&._\-])[A-Za-z\d@$!%*?&._\-]{10,}$'
@@ -20,12 +29,19 @@ def validate_password_strength(password: str) -> bool:
     return bool(PASSWORD_REGEX.match(password))
 
 
+def _bytes_bcrypt(password: str) -> bytes:
+    return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+
+
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_bytes_bcrypt(password), bcrypt.gensalt(rounds=BCRYPT_RONDAS)).decode("ascii")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(_bytes_bcrypt(plain), hashed.encode("ascii"))
+    except (ValueError, TypeError):  # hash mal formado o vacío: no valida, sin error 500
+        return False
 
 
 def create_access_token(data: dict) -> str:
@@ -45,8 +61,8 @@ def create_refresh_token(data: dict) -> str:
 
 
 def decode_token(token: str) -> Optional[dict]:
+    """Payload si la firma y la caducidad son válidas; None en cualquier otro caso."""
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        return payload
-    except JWTError:
+        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except jwt.PyJWTError:
         return None

@@ -13,6 +13,7 @@ import logging
 import math
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -403,90 +404,96 @@ def _get_or_create_parametros(db: Session) -> CrossSellingParametros:
     return p
 
 
-def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
-    """
-    Recalcula oportunidades de cross-selling y alertas de fuga para el ejercicio.
-    Borra y regenera. Llamar dentro de una transacción ya abierta.
-    """
-    params = _get_or_create_parametros(db)
+@dataclass
+class _Contexto:
+    """Datos comunes a todos los clientes de un recálculo."""
+    ejercicio: int
+    params: CrossSellingParametros
+    hoy: date
+    fecha_ref: date
+    ahora: datetime
+    excluidos_aux: set
+    prima_media_ramo: dict
+    margen_medio_ramo: dict
+    margenes_reales: dict
+    portfolios_ant: dict
+    clientes_db: dict
+    percentiles: tuple          # (p25, p50, p75) de prima vigente
+    compradores_por_ramo: dict
+    afinidad_dict: dict
+    afinidad_desc: dict
+    ramos_objetivo: list
 
-    # ── Auxiliares excluidos de oportunidades ─────────────────────────────────────
-    from ..models.cliente import AuxiliarParticipacion, RamoStatsEjercicio as _RamoStats
-    excluidos_aux: set[str] = {
-        a.auxiliar for a in db.query(AuxiliarParticipacion).all() if not a.participa
-    }
 
-    # ── Stats de ramo: desde BD si están calculados, si no on-the-fly ────────────
-    # Los stats están por sub-ramo; los agregamos a categoría normalizada (media ponderada
-    # por n_clientes) para usarlos en el lookup por ramo_recomendado (nivel normalizado).
-    _stats_bd = db.query(_RamoStats).filter(_RamoStats.ejercicio == ejercicio).all()
-    if _stats_bd:
-        _grouped: dict[str, list] = defaultdict(list)
-        for s in _stats_bd:
+def _medias_por_ramo(stats_bd: list, recibos_act: list) -> tuple[dict, dict]:
+    """(prima media, margen medio) por categoría de ramo.
+
+    Con stats en BD (por sub-ramo) se agregan a categoría normalizada con media ponderada por
+    n_clientes; si no hay, se calculan sobre los recibos del ejercicio.
+    """
+    if stats_bd:
+        grouped: dict[str, list] = defaultdict(list)
+        for s in stats_bd:
             cat = s.ramo_categoria or _normalizar_ramo(s.ramo)
             n = s.n_clientes or 1
-            _grouped[cat].append((s.prima_media, s.margen_medio, n))
+            grouped[cat].append((s.prima_media, s.margen_medio, n))
         prima_media_ramo: dict[str, float] = {}
         margen_medio_ramo: dict[str, float] = {}
-        for cat, entries in _grouped.items():
+        for cat, entries in grouped.items():
             total_n = sum(e[2] for e in entries)
             prima_media_ramo[cat] = sum(e[0] * e[2] for e in entries) / total_n
             margen_medio_ramo[cat] = sum(e[1] * e[2] for e in entries) / total_n
-    else:
-        prima_media_ramo = {}
-        margen_medio_ramo = {}
+        return prima_media_ramo, margen_medio_ramo
 
-    # ── Recibos actuales y anteriores ────────────────────────────────────────────
-    recibos_act = db.query(Recibo).filter(Recibo.ejercicio == ejercicio).all()
-    if not recibos_act:
-        return {"sin_datos": True, "oportunidades": 0, "alertas": 0}
+    ramo_prima_cli: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    ramo_liqui_cli: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for r in recibos_act:
+        if not r.ramo or not r.pr_total or float(r.pr_total) <= 0 or not r.tomador:
+            continue
+        rn = _normalizar_ramo(r.ramo, r.producto)
+        t = _norm_nombre(r.tomador)
+        ramo_prima_cli[rn][t] += float(r.pr_total)
+        if r.liqui is not None:
+            ramo_liqui_cli[rn][t] += float(r.liqui)
+    prima_media_ramo = {rn: sum(clientes.values()) / len(clientes)
+                        for rn, clientes in ramo_prima_cli.items() if clientes}
+    margen_medio_ramo = {}
+    for rn, clientes_prima in ramo_prima_cli.items():
+        margenes = []
+        for t, prima in clientes_prima.items():
+            if prima > 0:
+                m = ramo_liqui_cli[rn].get(t, 0.0) / prima
+                if 0.0 < m < 1.0:
+                    margenes.append(m)
+        if margenes:
+            margen_medio_ramo[rn] = sum(margenes) / len(margenes)
+    return prima_media_ramo, margen_medio_ramo
 
-    recibos_ant = db.query(Recibo).filter(Recibo.ejercicio == ejercicio - 1).all()
 
-    # ── Prima/margen por ramo on-the-fly si no hay stats en BD ───────────────────
-    if not _stats_bd:
-        _ramo_prima_cli: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-        _ramo_liqui_cli: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-        for r in recibos_act:
-            if not r.ramo or not r.pr_total or float(r.pr_total) <= 0 or not r.tomador:
-                continue
-            rn = _normalizar_ramo(r.ramo, r.producto)
-            t = _norm_nombre(r.tomador)
-            _ramo_prima_cli[rn][t] += float(r.pr_total)
-            if r.liqui is not None:
-                _ramo_liqui_cli[rn][t] += float(r.liqui)
-        prima_media_ramo = {
-            rn: sum(clientes.values()) / len(clientes)
-            for rn, clientes in _ramo_prima_cli.items() if clientes
-        }
-        for rn, clientes_prima in _ramo_prima_cli.items():
-            margenes = []
-            for t, prima in clientes_prima.items():
-                if prima > 0:
-                    liqui = _ramo_liqui_cli[rn].get(t, 0.0)
-                    m = liqui / prima
-                    if 0.0 < m < 1.0:
-                        margenes.append(m)
-            if margenes:
-                margen_medio_ramo[rn] = sum(margenes) / len(margenes)
+def _margenes_reales(db: Session, ejercicio: int) -> dict[str, float]:
+    """{tomador_norm: margen decimal} desde el módulo de rentabilidad.
 
-    # ── Márgenes reales del módulo de rentabilidad ───────────────────────────────
-    # {tomador_norm: margen decimal (ej: 0.18 = 18%)}
-    margenes_reales: dict[str, float] = {}
+    OJO (auditoría 2026-11-15, pendiente de decisión): las claves no coinciden con las que
+    devuelve calcular_rentabilidad_clientes ('tomador', y no hay 'margen_pct_normalizado' por
+    cliente), así que este diccionario sale SIEMPRE vacío y las alertas de fuga usan el margen
+    por defecto del 15 %. Se conserva tal cual en el refactor (no cambia resultados).
+    """
+    margenes: dict[str, float] = {}
     try:
         rent = calcular_rentabilidad_clientes(db, ejercicio)
         if not rent.get('sin_datos'):
             for c in rent.get('clientes', []):
-                t_norm = _norm_nombre(c.get('cliente', ''))
                 m = c.get('margen_pct_normalizado')
                 if m is not None:
-                    margenes_reales[t_norm] = float(m) / 100
+                    margenes[_norm_nombre(c.get('cliente', ''))] = float(m) / 100
     except Exception:
         pass  # si el módulo falla, usamos proxy 15%
+    return margenes
 
-    # ── Construir portfolios actuales ─────────────────────────────────────────────
-    # ramos / prima_total  → todos los recibos del ejercicio (para comparación fuga)
-    # ramos_vigentes / prima_vigente → solo recibos con hasta >= hoy (cartera en vigor)
+
+def _portfolios_actuales(recibos_act: list, fecha_ref: date) -> dict[str, dict]:
+    """Cartera por tomador. ramos / prima_total: todo el ejercicio (para comparar fuga);
+    ramos_vigentes / prima_vigente: solo recibos vigentes en fecha_ref (cartera en vigor)."""
     portfolios: dict[str, dict] = defaultdict(lambda: {
         'ramos': set(), 'prima_total': 0.0,
         'ramos_vigentes': set(), 'prima_vigente': 0.0, 'liqui_vigente': 0.0,
@@ -496,20 +503,13 @@ def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
         'min_desde': None, 'max_desde': None, 'max_hasta': None,
         'recibos': [],
     })
-
-    hoy = date.today()
-    # Para ejercicios pasados, consideramos vigentes los recibos activos a fin de año
-    fecha_ref = date(ejercicio, 12, 31) if ejercicio < hoy.year else hoy
-
     for r in recibos_act:
         if not r.tomador or _es_anulado(r.estado):
             continue
-        t = _norm_nombre(r.tomador)
         ramo_n = _normalizar_ramo(r.ramo or '', r.producto)
-        p = portfolios[t]
+        p = portfolios[_norm_nombre(r.tomador)]
         p['ramos'].add(ramo_n)
         p['prima_total'] += float(r.pr_total or 0)
-        # Solo recibos vigentes en la fecha de referencia del ejercicio
         if r.hasta and r.hasta >= fecha_ref:
             p['ramos_vigentes'].add(ramo_n)
             p['prima_vigente'] += float(r.pr_total or 0)
@@ -518,8 +518,7 @@ def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
             if sub_text:
                 p['subramos_vigentes'][ramo_n].add(_limpiar_subramo(sub_text))
         if r.numero_poliza:
-            cur = p['polizas_prima'].get(r.numero_poliza, 0.0)
-            p['polizas_prima'][r.numero_poliza] = cur + float(r.pr_total or 0)
+            p['polizas_prima'][r.numero_poliza] = p['polizas_prima'].get(r.numero_poliza, 0.0) + float(r.pr_total or 0)
         if r.ente:
             p['auxiliares'][r.ente] = p['auxiliares'].get(r.ente, 0.0) + float(r.pr_total or 0)
         if r.desde:
@@ -531,312 +530,304 @@ def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
             if p['max_hasta'] is None or r.hasta > p['max_hasta']:
                 p['max_hasta'] = r.hasta
         p['recibos'].append(r)
+    return portfolios
 
-    # ── Portfolios anteriores ─────────────────────────────────────────────────────
-    portfolios_ant: dict[str, dict] = defaultdict(lambda: {
-        'ramos': set(), 'prima_total': 0.0, 'polizas_prima': {},
-    })
+
+def _portfolios_anteriores(recibos_ant: list) -> dict[str, dict]:
+    portfolios_ant: dict[str, dict] = defaultdict(lambda: {'ramos': set(), 'prima_total': 0.0, 'polizas_prima': {}})
     for r in recibos_ant:
         if not r.tomador or _es_anulado(r.estado):
             continue
-        t = _norm_nombre(r.tomador)
-        pa = portfolios_ant[t]
+        pa = portfolios_ant[_norm_nombre(r.tomador)]
         pa['ramos'].add(_normalizar_ramo(r.ramo or '', r.producto))
         pa['prima_total'] += float(r.pr_total or 0)
         if r.numero_poliza:
-            cur = pa['polizas_prima'].get(r.numero_poliza, 0.0)
-            pa['polizas_prima'][r.numero_poliza] = cur + float(r.pr_total or 0)
+            pa['polizas_prima'][r.numero_poliza] = pa['polizas_prima'].get(r.numero_poliza, 0.0) + float(r.pr_total or 0)
+    return portfolios_ant
 
-    # ── Clientes registrados ──────────────────────────────────────────────────────
-    clientes_db: dict[str, Cliente] = {
-        c.nombre_normalizado: c for c in db.query(Cliente).all()
-    }
 
-    # ── Percentiles de prima vigente ─────────────────────────────────────────────
+def _percentiles_prima(portfolios: dict) -> tuple[float, float, float]:
+    """p25, p50 y p75 de la prima vigente (0 si hay menos de 4 clientes con prima)."""
     primas = sorted(p['prima_vigente'] for p in portfolios.values() if p['prima_vigente'] > 0)
     n = len(primas)
-    p25 = primas[max(0, int(n * 0.25) - 1)] if n >= 4 else 0.0
-    p50 = primas[max(0, int(n * 0.50) - 1)] if n >= 4 else 0.0
-    p75 = primas[max(0, int(n * 0.75) - 1)] if n >= 4 else 0.0
+    if n < 4:
+        return 0.0, 0.0, 0.0
+    return tuple(primas[max(0, int(n * q) - 1)] for q in (0.25, 0.50, 0.75))
 
-    # ── Perfiles de compradores por ramo (para propensión interna) ────────────────
-    # Usa ramos_vigentes y prima_vigente para que los perfiles sean reales
-    compradores_por_ramo: dict[str, list] = defaultdict(list)
+
+def _compradores_por_ramo(portfolios: dict, clientes_db: dict) -> dict[str, list]:
+    """Perfil de los clientes que ya tienen cada ramo en vigor (para la propensión interna)."""
+    compradores: dict[str, list] = defaultdict(list)
     for t, port in portfolios.items():
         c_db = clientes_db.get(t)
         tipo = _tipo_cliente(c_db, t, port['ramos_vigentes'])
         ant = _antiguedad_anos(c_db.fecha_alta if c_db else None, port['min_desde'])
         for ramo in port['ramos_vigentes']:
-            compradores_por_ramo[ramo].append({
-                'tipo': tipo.value,
-                'antiguedad': ant,
-                'prima': port['prima_vigente'],
-                'n_ramos': len(port['ramos_vigentes']),
-            })
+            compradores[ramo].append({'tipo': tipo.value, 'antiguedad': ant,
+                                      'prima': port['prima_vigente'], 'n_ramos': len(port['ramos_vigentes'])})
+    return compradores
 
-    # ── Matriz de afinidad como dict rápido ──────────────────────────────────────
-    matriz = params.matriz_afinidad or DEFAULT_MATRIZ
+
+def _matriz_afinidad(params: CrossSellingParametros) -> tuple[dict, dict, list]:
     afinidad_dict: dict[tuple, float] = {}
     afinidad_desc: dict[tuple, str] = {}
-    for entry in matriz:
+    for entry in params.matriz_afinidad or DEFAULT_MATRIZ:
         key = (entry['ramo_base'], entry['ramo_objetivo'])
         afinidad_dict[key] = float(entry.get('afinidad', 0.3))
         afinidad_desc[key] = entry.get('desc', f"{entry['ramo_base']} → {entry['ramo_objetivo']}")
+    return afinidad_dict, afinidad_desc, list(set(k[1] for k in afinidad_dict))
 
-    ramos_objetivo = list(set(k[1] for k in afinidad_dict))
 
-    # ── Borrar previos del ejercicio ──────────────────────────────────────────────
-    db.query(CrossSellingOportunidad).filter(CrossSellingOportunidad.ejercicio == ejercicio).delete()
-    db.query(FugaAlerta).filter(FugaAlerta.ejercicio == ejercicio).delete()
+def _accion_oportunidad(score: float) -> str:
+    if score >= 70:
+        return "Llamar esta semana"
+    if score >= 50:
+        return "Incluir en campaña"
+    if score >= 35:
+        return "Revisar en renovación"
+    return "Monitorizar"
 
-    ahora = datetime.now(timezone.utc)
-    n_oport = 0
-    n_alertas = 0
 
-    for tomador_norm, port in portfolios.items():
-        c_db = clientes_db.get(tomador_norm)
-        tipo_cli = _tipo_cliente(c_db, tomador_norm, port['ramos_vigentes'])
-        fecha_alta_cli = c_db.fecha_alta if c_db else None
-        cliente_id = c_db.id if c_db else None
-
-        ant_anos = _antiguedad_anos(fecha_alta_cli, port['min_desde'])
-        # ramos_vigentes = cartera en vigor en fecha_ref; ramos = todos del ejercicio (para fuga)
-        ramos_vigentes = port['ramos_vigentes']
-        ramos_act = port['ramos']
-        prima_vigente = port['prima_vigente']
-        liqui_vigente = port['liqui_vigente']
-        n_ramos = len(ramos_vigentes)
-
-        # Días hasta el vencimiento MÁS PRÓXIMO entre pólizas activas (no el más lejano)
-        min_hasta_vigente = min(
-            (r.hasta for r in port['recibos'] if r.hasta and r.hasta >= fecha_ref),
-            default=None,
-        )
-        dias_vencimiento: Optional[int] = None
-        if min_hasta_vigente:
-            dias_vencimiento = (min_hasta_vigente - hoy).days
-
-        # Renovación reciente: algún recibo con desde en últimos 60 días
-        tiene_reciente = any(
-            r.desde and (hoy - r.desde).days <= 60
-            for r in port['recibos']
-        )
-
-        s_valor = _score_segmento_valor(prima_vigente, p25, p50, p75)
-        s_timing = _score_timing(dias_vencimiento, ant_anos, tiene_reciente, params)
-
-        # Auxiliar principal: el que más prima acumula para este cliente
-        auxiliar_principal = max(port['auxiliares'], key=port['auxiliares'].get) if port['auxiliares'] else None
-
-        # ── CROSS-SELLING ─────────────────────────────────────────────────────
-        aux_excluido = auxiliar_principal is not None and auxiliar_principal in excluidos_aux
-        _ramos_iter = ramos_objetivo if (not aux_excluido and ramos_vigentes) else []
-        _permitidos = _RAMOS_FISICO if tipo_cli == TipoCliente.FISICO else _RAMOS_JURIDICO
-        for ramo_obj in _ramos_iter:
-            if ramo_obj in ramos_vigentes:  # ya lo tiene en vigor
-                continue
-            if ramo_obj not in _permitidos:  # no es adecuado para este tipo de cliente
-                continue
-
-            mejor_afinidad = 0.0
-            mejor_desc = ""
-            for ramo_base in ramos_vigentes:
-                key = (ramo_base, ramo_obj)
-                af = afinidad_dict.get(key, 0.0)
-                if af > mejor_afinidad:
-                    mejor_afinidad = af
-                    mejor_desc = afinidad_desc.get(key, "")
-
-            if mejor_afinidad < 0.30:
-                continue
-
-            s_prop = _score_propension(
-                tipo_cli, ant_anos, prima_vigente, n_ramos,
-                compradores_por_ramo.get(ramo_obj, [])
-            )
-
-            score_final = (
-                params.peso_afinidad * mejor_afinidad * 100
-                + params.peso_propension * s_prop
-                + params.peso_valor * s_valor
-                + params.peso_timing * s_timing
-            )
-
-            if score_final < 20:
-                continue
-
-            if score_final >= 70:
-                accion = "Llamar esta semana"
-            elif score_final >= 50:
-                accion = "Incluir en campaña"
-            elif score_final >= 35:
-                accion = "Revisar en renovación"
-            else:
-                accion = "Monitorizar"
-
-            motivo = _construir_motivo(ramos_vigentes, ramo_obj, ant_anos, s_prop, mejor_desc, tipo_cli)
-
-            # Prima esperada = prima media del ramo recomendado en la cartera real
-            p_esp = prima_media_ramo.get(ramo_obj)
-            # Margen esperado = prima_esperada × margen medio del ramo recomendado
-            m_ramo_val = margen_medio_ramo.get(ramo_obj, 0.15)
-            m_esp = round(p_esp * m_ramo_val, 2) if p_esp else None
-
-            db.add(CrossSellingOportunidad(
-                ejercicio=ejercicio,
-                tomador=tomador_norm,
-                cliente_id=cliente_id,
-                ramo_recomendado=ramo_obj,
-                score=round(score_final, 1),
-                score_afinidad=round(mejor_afinidad * 100, 1),
-                score_propension=round(s_prop, 1),
-                score_valor=round(s_valor, 1),
-                score_timing=round(s_timing, 1),
-                margen_esperado=m_esp,
-                prima_esperada=round(p_esp, 2) if p_esp else None,
-                motivo=motivo,
-                accion_sugerida=accion,
-                ramos_actuales=list(ramos_vigentes),
-                subramos_vigentes={
-                    cat: sorted(list(subs))
-                    for cat, subs in port['subramos_vigentes'].items()
-                    if cat in ramos_vigentes
-                },
-                n_ramos=n_ramos,
-                prima_total_activa=round(prima_vigente, 2),
-                antiguedad_anos=round(ant_anos, 1),
-                tipo_cliente=tipo_cli.value,
-                auxiliar=auxiliar_principal,
-                recalculado_at=ahora,
-            ))
-            n_oport += 1
-
-        # ── FUGA ─────────────────────────────────────────────────────────────
-        senales = []
-        peso_acum = 0.0
-        port_ant = portfolios_ant.get(tomador_norm)
-
-        if port_ant:
-            # Ramos perdidos: tenía el año pasado y no están vigentes hoy
-            ramos_perdidos = port_ant['ramos'] - ramos_vigentes
-            if ramos_perdidos:
-                senales.append({
-                    "tipo": "ramo_perdido",
-                    "desc": f"Ha perdido ramos: {', '.join(sorted(ramos_perdidos))}",
-                    "peso": 1.0,
-                })
-                peso_acum += 1.0 * len(ramos_perdidos)
-
-            if port_ant['prima_total'] > 0:
-                caida = (port_ant['prima_total'] - prima_vigente) / port_ant['prima_total']
-                if caida > params.umbral_bajada_prima:
-                    senales.append({
-                        "tipo": "prima_bajando",
-                        "desc": f"Prima total baja un {caida * 100:.0f}% vs ejercicio anterior",
-                        "peso": 0.8,
-                    })
-                    peso_acum += 0.8
-
-            for poliza, prima_ant_pol in port_ant['polizas_prima'].items():
-                prima_act_pol = port['polizas_prima'].get(poliza, 0.0)
-                if prima_ant_pol > 0 and prima_act_pol > 0:
-                    caida_pol = (prima_ant_pol - prima_act_pol) / prima_ant_pol
-                    if caida_pol > params.umbral_bajada_prima:
-                        senales.append({
-                            "tipo": "prima_poliza_bajando",
-                            "desc": f"Póliza {poliza}: prima baja {caida_pol * 100:.0f}%",
-                            "peso": 0.6,
-                        })
-                        peso_acum += 0.6
-                        break  # una señal por cliente es suficiente
-
-        if dias_vencimiento is not None and 0 < dias_vencimiento <= params.dias_vencimiento_urgente:
-            senales.append({
-                "tipo": "vencimiento_proximo",
-                "desc": f"Vence en {dias_vencimiento} días",
-                "peso": 0.9,
-            })
-            peso_acum += 0.9
-
-        if port_ant and len(port_ant['ramos']) > 1 and n_ramos == 1:
-            senales.append({
-                "tipo": "cartera_reducida",
-                "desc": "Cartera reducida a 1 ramo",
-                "peso": 0.7,
-            })
-            peso_acum += 0.7
-
-        # Sin nueva póliza desde hace mucho (usa max_desde, no max_hasta)
-        max_desde = port.get('max_desde')
-        if max_desde:
-            dias_sin_nueva = (hoy - max_desde).days
-            if dias_sin_nueva > params.dias_inactividad_riesgo:
-                senales.append({
-                    "tipo": "sin_renovacion",
-                    "desc": f"Sin nueva póliza desde hace {dias_sin_nueva // 30} meses — posible desvinculación progresiva",
-                    "peso": 0.6,
-                })
-                peso_acum += 0.6
-
-        # Cartera monomedades: 1 solo ramo → riesgo de pérdida total de la relación
-        if n_ramos == 1 and prima_vigente > 0:
-            ramo_unico = next(iter(ramos_vigentes), '?')
-            senales.append({
-                "tipo": "mono_cartera",
-                "desc": f"Solo tiene contratado {ramo_unico}. Si no renueva, se pierde la relación completa",
-                "peso": 0.45,
-            })
-            peso_acum += 0.45
-
-        if not senales:
+def _oportunidades_cliente(ctx: _Contexto, cli: dict, port: dict) -> list[CrossSellingOportunidad]:
+    """Ramos recomendables a un cliente (afinidad ≥ 0,30 y score ≥ 20)."""
+    ramos_vigentes = cli['ramos_vigentes']
+    aux_excluido = cli['auxiliar'] is not None and cli['auxiliar'] in ctx.excluidos_aux
+    if aux_excluido or not ramos_vigentes:
+        return []
+    permitidos = _RAMOS_FISICO if cli['tipo'] == TipoCliente.FISICO else _RAMOS_JURIDICO
+    params = ctx.params
+    out = []
+    for ramo_obj in ctx.ramos_objetivo:
+        if ramo_obj in ramos_vigentes or ramo_obj not in permitidos:  # ya lo tiene / no adecuado
+            continue
+        mejor_afinidad, mejor_desc = 0.0, ""
+        for ramo_base in sorted(ramos_vigentes):  # orden fijo: en un empate gana siempre el mismo motivo
+            af = ctx.afinidad_dict.get((ramo_base, ramo_obj), 0.0)
+            if af > mejor_afinidad:
+                mejor_afinidad, mejor_desc = af, ctx.afinidad_desc.get((ramo_base, ramo_obj), "")
+        if mejor_afinidad < 0.30:
             continue
 
-        risk_score = min(100.0, (peso_acum / 4.0) * 100)
-        margen_real_cli = margenes_reales.get(tomador_norm, 0.15)
-        # valor_protegido = comisión activa × margen neto del cliente
-        # (la comisión = liqui, que es lo que realmente ingresa el bróker)
-        base_valor = liqui_vigente if liqui_vigente > 0 else prima_vigente
-        valor_protegido = round(base_valor * margen_real_cli, 2)
-        prioridad = round(risk_score * valor_protegido / 1000, 4)
+        s_prop = _score_propension(cli['tipo'], cli['antiguedad'], cli['prima_vigente'], cli['n_ramos'],
+                                   ctx.compradores_por_ramo.get(ramo_obj, []))
+        score_final = (
+            params.peso_afinidad * mejor_afinidad * 100
+            + params.peso_propension * s_prop
+            + params.peso_valor * cli['s_valor']
+            + params.peso_timing * cli['s_timing']
+        )
+        if score_final < 20:
+            continue
 
-        tipos_senal = {s['tipo'] for s in senales}
-        if 'ramo_perdido' in tipos_senal:
-            accion_r = "Analizar causa de pérdida de ramos y recuperar relación"
-        elif 'vencimiento_proximo' in tipos_senal:
-            accion_r = "Contactar antes del vencimiento para asegurar la renovación"
-        elif 'prima_bajando' in tipos_senal:
-            accion_r = "Revisar satisfacción — riesgo de reducción de cobertura"
-        elif 'sin_renovacion' in tipos_senal:
-            accion_r = "Contactar para revisar necesidades — sin nuevos productos desde hace meses"
-        elif 'mono_cartera' in tipos_senal:
-            accion_r = "Proponer ampliación de cartera — cliente con un único producto"
-        else:
-            accion_r = "Monitorizar y reforzar relación"
-
-        db.add(FugaAlerta(
-            ejercicio=ejercicio,
-            tomador=tomador_norm,
-            cliente_id=cliente_id,
-            risk_score=round(risk_score, 1),
-            valor_protegido=valor_protegido,
-            prioridad=prioridad,
-            senales=senales,
-            accion_recomendada=accion_r,
-            dias_hasta_vencimiento=dias_vencimiento,
-            prima_total_activa=round(prima_vigente, 2),
-            liqui_vigente=round(liqui_vigente, 2),
-            n_ramos=n_ramos,
-            antiguedad_anos=round(ant_anos, 1),
-            tipo_cliente=tipo_cli.value,
-            auxiliar=auxiliar_principal,
+        # Prima esperada = prima media del ramo recomendado; margen = prima × margen medio del ramo
+        p_esp = ctx.prima_media_ramo.get(ramo_obj)
+        m_ramo_val = ctx.margen_medio_ramo.get(ramo_obj, 0.15)
+        out.append(CrossSellingOportunidad(
+            ejercicio=ctx.ejercicio,
+            tomador=cli['tomador'],
+            cliente_id=cli['cliente_id'],
+            ramo_recomendado=ramo_obj,
+            score=round(score_final, 1),
+            score_afinidad=round(mejor_afinidad * 100, 1),
+            score_propension=round(s_prop, 1),
+            score_valor=round(cli['s_valor'], 1),
+            score_timing=round(cli['s_timing'], 1),
+            margen_esperado=round(p_esp * m_ramo_val, 2) if p_esp else None,
+            prima_esperada=round(p_esp, 2) if p_esp else None,
+            motivo=_construir_motivo(ramos_vigentes, ramo_obj, cli['antiguedad'], s_prop, mejor_desc, cli['tipo']),
+            accion_sugerida=_accion_oportunidad(score_final),
             ramos_actuales=list(ramos_vigentes),
-            recalculado_at=ahora,
+            subramos_vigentes={cat: sorted(list(subs)) for cat, subs in port['subramos_vigentes'].items()
+                               if cat in ramos_vigentes},
+            n_ramos=cli['n_ramos'],
+            prima_total_activa=round(cli['prima_vigente'], 2),
+            antiguedad_anos=round(cli['antiguedad'], 1),
+            tipo_cliente=cli['tipo'].value,
+            auxiliar=cli['auxiliar'],
+            recalculado_at=ctx.ahora,
         ))
-        n_alertas += 1
+    return out
+
+
+def _senales_fuga(ctx: _Contexto, cli: dict, port: dict) -> tuple[list[dict], float]:
+    """Señales de riesgo de fuga de un cliente y su peso acumulado."""
+    params, ramos_vigentes, prima_vigente, n_ramos = ctx.params, cli['ramos_vigentes'], cli['prima_vigente'], cli['n_ramos']
+    senales: list[dict] = []
+    peso_acum = 0.0
+    port_ant = ctx.portfolios_ant.get(cli['tomador'])
+
+    if port_ant:
+        # Ramos perdidos: tenía el año pasado y no están vigentes hoy
+        ramos_perdidos = port_ant['ramos'] - ramos_vigentes
+        if ramos_perdidos:
+            senales.append({"tipo": "ramo_perdido", "desc": f"Ha perdido ramos: {', '.join(sorted(ramos_perdidos))}",
+                            "peso": 1.0})
+            peso_acum += 1.0 * len(ramos_perdidos)
+        if port_ant['prima_total'] > 0:
+            caida = (port_ant['prima_total'] - prima_vigente) / port_ant['prima_total']
+            if caida > params.umbral_bajada_prima:
+                senales.append({"tipo": "prima_bajando",
+                                "desc": f"Prima total baja un {caida * 100:.0f}% vs ejercicio anterior", "peso": 0.8})
+                peso_acum += 0.8
+        for poliza, prima_ant_pol in port_ant['polizas_prima'].items():
+            prima_act_pol = port['polizas_prima'].get(poliza, 0.0)
+            if prima_ant_pol > 0 and prima_act_pol > 0:
+                caida_pol = (prima_ant_pol - prima_act_pol) / prima_ant_pol
+                if caida_pol > params.umbral_bajada_prima:
+                    senales.append({"tipo": "prima_poliza_bajando",
+                                    "desc": f"Póliza {poliza}: prima baja {caida_pol * 100:.0f}%", "peso": 0.6})
+                    peso_acum += 0.6
+                    break  # una señal por cliente es suficiente
+
+    dias = cli['dias_vencimiento']
+    if dias is not None and 0 < dias <= params.dias_vencimiento_urgente:
+        senales.append({"tipo": "vencimiento_proximo", "desc": f"Vence en {dias} días", "peso": 0.9})
+        peso_acum += 0.9
+
+    if port_ant and len(port_ant['ramos']) > 1 and n_ramos == 1:
+        senales.append({"tipo": "cartera_reducida", "desc": "Cartera reducida a 1 ramo", "peso": 0.7})
+        peso_acum += 0.7
+
+    # Sin nueva póliza desde hace mucho (usa max_desde, no max_hasta)
+    max_desde = port.get('max_desde')
+    if max_desde:
+        dias_sin_nueva = (ctx.hoy - max_desde).days
+        if dias_sin_nueva > params.dias_inactividad_riesgo:
+            senales.append({"tipo": "sin_renovacion",
+                            "desc": f"Sin nueva póliza desde hace {dias_sin_nueva // 30} meses — posible desvinculación progresiva",
+                            "peso": 0.6})
+            peso_acum += 0.6
+
+    # Cartera monoramo: 1 solo ramo → riesgo de pérdida total de la relación
+    if n_ramos == 1 and prima_vigente > 0:
+        ramo_unico = next(iter(ramos_vigentes), '?')
+        senales.append({"tipo": "mono_cartera",
+                        "desc": f"Solo tiene contratado {ramo_unico}. Si no renueva, se pierde la relación completa",
+                        "peso": 0.45})
+        peso_acum += 0.45
+    return senales, peso_acum
+
+
+def _accion_fuga(tipos_senal: set) -> str:
+    """Acción recomendada según la señal más grave presente."""
+    if 'ramo_perdido' in tipos_senal:
+        return "Analizar causa de pérdida de ramos y recuperar relación"
+    if 'vencimiento_proximo' in tipos_senal:
+        return "Contactar antes del vencimiento para asegurar la renovación"
+    if 'prima_bajando' in tipos_senal:
+        return "Revisar satisfacción — riesgo de reducción de cobertura"
+    if 'sin_renovacion' in tipos_senal:
+        return "Contactar para revisar necesidades — sin nuevos productos desde hace meses"
+    if 'mono_cartera' in tipos_senal:
+        return "Proponer ampliación de cartera — cliente con un único producto"
+    return "Monitorizar y reforzar relación"
+
+
+def _alerta_fuga(ctx: _Contexto, cli: dict, senales: list[dict], peso_acum: float) -> FugaAlerta:
+    risk_score = min(100.0, (peso_acum / 4.0) * 100)
+    margen_real_cli = ctx.margenes_reales.get(cli['tomador'], 0.15)
+    # valor_protegido = comisión activa × margen neto del cliente
+    # (la comisión = liqui, que es lo que realmente ingresa el bróker)
+    base_valor = cli['liqui_vigente'] if cli['liqui_vigente'] > 0 else cli['prima_vigente']
+    valor_protegido = round(base_valor * margen_real_cli, 2)
+    return FugaAlerta(
+        ejercicio=ctx.ejercicio,
+        tomador=cli['tomador'],
+        cliente_id=cli['cliente_id'],
+        risk_score=round(risk_score, 1),
+        valor_protegido=valor_protegido,
+        prioridad=round(risk_score * valor_protegido / 1000, 4),
+        senales=senales,
+        accion_recomendada=_accion_fuga({s['tipo'] for s in senales}),
+        dias_hasta_vencimiento=cli['dias_vencimiento'],
+        prima_total_activa=round(cli['prima_vigente'], 2),
+        liqui_vigente=round(cli['liqui_vigente'], 2),
+        n_ramos=cli['n_ramos'],
+        antiguedad_anos=round(cli['antiguedad'], 1),
+        tipo_cliente=cli['tipo'].value,
+        auxiliar=cli['auxiliar'],
+        ramos_actuales=list(cli['ramos_vigentes']),
+        recalculado_at=ctx.ahora,
+    )
+
+
+def _datos_cliente(ctx: _Contexto, tomador_norm: str, port: dict) -> dict:
+    """Datos de un cliente que comparten oportunidades y alertas."""
+    c_db = ctx.clientes_db.get(tomador_norm)
+    ramos_vigentes = port['ramos_vigentes']
+    tipo = _tipo_cliente(c_db, tomador_norm, ramos_vigentes)
+    antiguedad = _antiguedad_anos(c_db.fecha_alta if c_db else None, port['min_desde'])
+    # Días hasta el vencimiento MÁS PRÓXIMO entre pólizas activas (no el más lejano)
+    min_hasta = min((r.hasta for r in port['recibos'] if r.hasta and r.hasta >= ctx.fecha_ref), default=None)
+    dias_vencimiento = (min_hasta - ctx.hoy).days if min_hasta else None
+    # Renovación reciente: algún recibo con desde en los últimos 60 días
+    tiene_reciente = any(r.desde and (ctx.hoy - r.desde).days <= 60 for r in port['recibos'])
+    p25, p50, p75 = ctx.percentiles
+    return {
+        'tomador': tomador_norm,
+        'cliente_id': c_db.id if c_db else None,
+        'tipo': tipo,
+        'antiguedad': antiguedad,
+        'ramos_vigentes': ramos_vigentes,
+        'prima_vigente': port['prima_vigente'],
+        'liqui_vigente': port['liqui_vigente'],
+        'n_ramos': len(ramos_vigentes),
+        'dias_vencimiento': dias_vencimiento,
+        's_valor': _score_segmento_valor(port['prima_vigente'], p25, p50, p75),
+        's_timing': _score_timing(dias_vencimiento, antiguedad, tiene_reciente, ctx.params),
+        # Auxiliar principal: el que más prima acumula para este cliente
+        'auxiliar': max(port['auxiliares'], key=port['auxiliares'].get) if port['auxiliares'] else None,
+    }
+
+
+def recalcular_cross_selling(db: Session, ejercicio: int) -> dict:
+    """
+    Recalcula oportunidades de cross-selling y alertas de fuga para el ejercicio.
+    Borra y regenera. Llamar dentro de una transacción ya abierta.
+    """
+    from ..models.cliente import AuxiliarParticipacion, RamoStatsEjercicio as _RamoStats
+
+    params = _get_or_create_parametros(db)
+    excluidos_aux = {a.auxiliar for a in db.query(AuxiliarParticipacion).all() if not a.participa}
+    stats_bd = db.query(_RamoStats).filter(_RamoStats.ejercicio == ejercicio).all()
+
+    recibos_act = db.query(Recibo).filter(Recibo.ejercicio == ejercicio).all()
+    if not recibos_act:
+        return {"sin_datos": True, "oportunidades": 0, "alertas": 0}
+    recibos_ant = db.query(Recibo).filter(Recibo.ejercicio == ejercicio - 1).all()
+    prima_media_ramo, margen_medio_ramo = _medias_por_ramo(stats_bd, recibos_act)
+    margenes_reales = _margenes_reales(db, ejercicio)
+
+    hoy = date.today()
+    # Para ejercicios pasados, consideramos vigentes los recibos activos a fin de año
+    fecha_ref = date(ejercicio, 12, 31) if ejercicio < hoy.year else hoy
+    portfolios = _portfolios_actuales(recibos_act, fecha_ref)
+    clientes_db: dict[str, Cliente] = {c.nombre_normalizado: c for c in db.query(Cliente).all()}
+    afinidad_dict, afinidad_desc, ramos_objetivo = _matriz_afinidad(params)
+
+    ctx = _Contexto(
+        ejercicio=ejercicio, params=params, hoy=hoy, fecha_ref=fecha_ref, ahora=datetime.now(timezone.utc),
+        excluidos_aux=excluidos_aux, prima_media_ramo=prima_media_ramo, margen_medio_ramo=margen_medio_ramo,
+        margenes_reales=margenes_reales, portfolios_ant=_portfolios_anteriores(recibos_ant),
+        clientes_db=clientes_db, percentiles=_percentiles_prima(portfolios),
+        compradores_por_ramo=_compradores_por_ramo(portfolios, clientes_db),
+        afinidad_dict=afinidad_dict, afinidad_desc=afinidad_desc, ramos_objetivo=ramos_objetivo,
+    )
+
+    # Borrar previos del ejercicio y regenerar
+    db.query(CrossSellingOportunidad).filter(CrossSellingOportunidad.ejercicio == ejercicio).delete()
+    db.query(FugaAlerta).filter(FugaAlerta.ejercicio == ejercicio).delete()
+    n_oport = n_alertas = 0
+    for tomador_norm, port in portfolios.items():
+        cli = _datos_cliente(ctx, tomador_norm, port)
+        for oportunidad in _oportunidades_cliente(ctx, cli, port):
+            db.add(oportunidad)
+            n_oport += 1
+        senales, peso_acum = _senales_fuga(ctx, cli, port)
+        if senales:
+            db.add(_alerta_fuga(ctx, cli, senales, peso_acum))
+            n_alertas += 1
 
     db.flush()
-    log.info(
-        "Cross-selling recalculado | ejercicio=%d oportunidades=%d alertas=%d",
-        ejercicio, n_oport, n_alertas,
-    )
+    log.info("Cross-selling recalculado | ejercicio=%d oportunidades=%d alertas=%d", ejercicio, n_oport, n_alertas)
     return {"oportunidades": n_oport, "alertas": n_alertas}

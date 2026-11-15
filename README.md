@@ -77,14 +77,20 @@ cd backend
 venv\Scripts\python -m pip install -r requirements-dev.txt
 
 venv\Scripts\python -m pytest                     # tests
-venv\Scripts
 venv\Scripts\ruff check app scripts tests          # linter (modo informe)
 venv\Scripts\python scripts\catalogo_errores.py    # catálogo de errores al día
+venv\Scripts\python -m pip_audit -r requirements.txt   # vulnerabilidades en dependencias
+
+# Refactors: capturar la salida ANTES de tocar el código y comparar después (debe ser idéntica).
+# Usan la base real; cross_selling se ejecuta en una transacción que se deshace siempre.
+venv\Scripts\python scripts\golden_lectura.py capturar|comparar
+set PYTHONHASHSEED=0 & venv\Scripts\python scripts\golden_cross_selling.py capturar|comparar
 
 # Frontend
 cd frontend
 npm run lint                                       # ESLint (modo informe)
 npx tsc --noEmit                                   # tipos
+npm audit                                          # vulnerabilidades en dependencias
 ```
 
 ---
