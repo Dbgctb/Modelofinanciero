@@ -10,7 +10,7 @@ from ..models.user import User
 from ..models.presupuesto import Presupuesto
 from ..models.kpi import UmbralKPI, ResultadoKPI, SemaforoColor
 from ..services.kpis import calcular_kpis, alertas_gestion
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from decimal import Decimal
 from ..core.errores import error_http
 
@@ -28,8 +28,7 @@ class UmbralOut(BaseModel):
     umbral_verde: float
     umbral_amarillo: float
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 def _get_presupuesto(presupuesto_id: str, db: Session) -> Presupuesto:

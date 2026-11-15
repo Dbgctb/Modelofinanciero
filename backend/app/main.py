@@ -55,6 +55,8 @@ app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
     docs_url="/api/docs" if settings.APP_ENV == "development" else None,
+    # El esquema OpenAPI (mapa completo de la API) era público también en producción.
+    openapi_url="/api/openapi.json" if settings.APP_ENV == "development" else None,
     redoc_url=None,
     lifespan=lifespan,
 )
