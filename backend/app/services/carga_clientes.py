@@ -12,6 +12,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ..models.cliente import Cliente, TipoCliente
+from ..core.errores import ErrorApp
 
 log = logging.getLogger(__name__)
 
@@ -137,17 +138,14 @@ def cargar_csv_clientes(db: Session, contenido: bytes) -> Tuple[int, int]:
                 break
 
     if df is None:
-        raise ValueError("No se pudo leer el archivo. Asegúrate de que es CSV o Excel.")
+        raise ErrorApp("CRS-005")
 
     df.columns = [_norm_col(c) for c in df.columns]
     df.rename(columns={k: v for k, v in _COL_MAP.items() if k in df.columns}, inplace=True)
 
     missing = [c for c in ['codigo_cliente', 'nombre'] if c not in df.columns]
     if missing:
-        raise ValueError(
-            f"Columnas requeridas no encontradas: {missing}. "
-            f"Columnas detectadas: {list(df.columns)}"
-        )
+        raise ErrorApp("CRS-006", faltan=", ".join(missing), detectadas=", ".join(map(str, df.columns)))
 
     df = df.dropna(subset=['codigo_cliente', 'nombre'])
     insertados = 0
@@ -176,21 +174,14 @@ def cargar_csv_clientes(db: Session, contenido: bytes) -> Tuple[int, int]:
             existente.fecha_alta = fecha_alta
             existente.fecha_nacimiento = fecha_nac
             existente.tipo = tipo
+            # Antes cada asignación iba en try/except: pass, que ocultaba cualquier fallo y
+            # contaba el cliente como actualizado igualmente. Un error aquí debe verse.
             if tel_fijo is not None:
-                try:
-                    existente.telefono_fijo = tel_fijo
-                except Exception:
-                    pass
+                existente.telefono_fijo = tel_fijo
             if tel_movil is not None:
-                try:
-                    existente.telefono_movil = tel_movil
-                except Exception:
-                    pass
+                existente.telefono_movil = tel_movil
             if email is not None:
-                try:
-                    existente.email = email
-                except Exception:
-                    pass
+                existente.email = email
             actualizados += 1
         else:
             # Solo incluir campos de contacto si tienen valor,

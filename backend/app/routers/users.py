@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List
@@ -14,6 +14,7 @@ from ..models.user import User
 from ..models.audit import AuditLog
 from ..models.password_reset import PasswordResetToken
 from ..schemas.user import UserCreate, UserUpdate, UserResponse
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/users", tags=["Usuarios"])
 log = logging.getLogger(__name__)
@@ -38,9 +39,9 @@ def create_user(
     current_user: User = Depends(require_admin),
 ):
     if db.query(User).filter(User.email == payload.email).first():
-        raise HTTPException(status_code=400, detail="El email ya está registrado")
+        raise error_http("USR-001")
     if db.query(User).filter(User.username == payload.username).first():
-        raise HTTPException(status_code=400, detail="El usuario ya existe")
+        raise error_http("USR-002")
 
     user = User(
         email=payload.email,
@@ -76,10 +77,10 @@ def update_user(
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise error_http("USR-003")
 
     if str(user_id) == str(current_user.id) and payload.is_active is False:
-        raise HTTPException(status_code=400, detail="No puedes desactivar tu propia cuenta")
+        raise error_http("USR-004")
 
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(user, field, value)
@@ -106,11 +107,11 @@ def deactivate_user(
     current_user: User = Depends(require_admin),
 ):
     if str(user_id) == str(current_user.id):
-        raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
+        raise error_http("USR-005")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise error_http("USR-003")
 
     user.is_active = False
     db.commit()
@@ -125,13 +126,10 @@ def reset_password(
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise error_http("USR-003")
 
     if not validate_password_strength(payload.new_password):
-        raise HTTPException(
-            status_code=400,
-            detail="La contraseña debe tener al menos 10 caracteres, una mayúscula, una minúscula, un número y un carácter especial",
-        )
+        raise error_http("AUTH-011")
 
     user.hashed_password = hash_password(payload.new_password)
     user.must_change_password = True
@@ -206,6 +204,6 @@ def cancel_reset_request(
 ):
     prt = db.query(PasswordResetToken).filter(PasswordResetToken.id == request_id).first()
     if not prt:
-        raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+        raise error_http("USR-006")
     prt.used = True
     db.commit()

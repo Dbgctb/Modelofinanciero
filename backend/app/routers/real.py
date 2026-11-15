@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from uuid import UUID
@@ -11,6 +11,7 @@ from ..models.presupuesto import Presupuesto
 from ..models.real import MesReal, DesvIngreso, DesvGasto, EstadoMesReal
 from ..models.carga import CargaContable, EstadoCarga
 from ..services.seguimiento_real import calcular_desviaciones_mes, resumen_acumulado
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/real", tags=["Seguimiento real"])
 
@@ -21,7 +22,7 @@ MESES_LABELS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
 def _get_presupuesto(db: Session, pid: UUID) -> Presupuesto:
     p = db.query(Presupuesto).filter(Presupuesto.id == pid).first()
     if not p:
-        raise HTTPException(404, "Presupuesto no encontrado")
+        raise error_http("PRE-001")
     return p
 
 
@@ -54,11 +55,11 @@ def vincular_carga_mes(
 ):
     """RF-REAL-01: vincula una carga mensual real al mes del presupuesto."""
     if not (1 <= mes <= 12):
-        raise HTTPException(400, "Mes inválido")
+        raise error_http("PRE-006")
 
     carga = db.query(CargaContable).filter(CargaContable.id == carga_id).first()
     if not carga:
-        raise HTTPException(404, "Carga no encontrada")
+        raise error_http("CAR-003")
 
     mes_real = db.query(MesReal).filter(
         MesReal.presupuesto_id == presupuesto_id, MesReal.mes == mes
@@ -89,9 +90,9 @@ def cerrar_mes(
         MesReal.presupuesto_id == presupuesto_id, MesReal.mes == mes
     ).first()
     if not mes_real:
-        raise HTTPException(400, "El mes no tiene carga vinculada")
+        raise error_http("REA-001")
     if mes_real.estado == EstadoMesReal.CON_INCIDENCIAS:
-        raise HTTPException(409, "Hay incidencias críticas pendientes en este mes")
+        raise error_http("REA-002")
 
     p = _get_presupuesto(db, presupuesto_id)
     calcular_desviaciones_mes(db, p, mes)
@@ -114,7 +115,7 @@ def reabrir_mes(
         MesReal.presupuesto_id == presupuesto_id, MesReal.mes == mes
     ).first()
     if not mes_real:
-        raise HTTPException(404, "Mes no encontrado")
+        raise error_http("REA-003")
     mes_real.estado = EstadoMesReal.REABIERTO
     mes_real.cerrado_at = None
     db.commit()

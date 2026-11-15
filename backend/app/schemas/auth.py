@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr, field_validator
 from ..core.security import validate_password_strength
+from ..core.errores import ErrorApp
 
 
 class LoginRequest(BaseModel):
@@ -25,10 +26,7 @@ class ChangePasswordRequest(BaseModel):
     @classmethod
     def password_strength(cls, v: str) -> str:
         if not validate_password_strength(v):
-            raise ValueError(
-                "La contraseña debe tener al menos 10 caracteres, "
-                "una mayúscula, una minúscula, un número y un carácter especial"
-            )
+            raise ErrorApp("AUTH-011")
         return v
 
 
@@ -44,8 +42,5 @@ class ResetPasswordRequest(BaseModel):
     @classmethod
     def password_strength(cls, v: str) -> str:
         if not validate_password_strength(v):
-            raise ValueError(
-                "La contraseña debe tener al menos 10 caracteres, "
-                "una mayúscula, una minúscula, un número y un carácter especial"
-            )
+            raise ErrorApp("AUTH-011")
         return v

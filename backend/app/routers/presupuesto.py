@@ -26,6 +26,8 @@ from ..services.presupuesto_gastos import (
     generar_lineas_gastos, recalcular_linea_gasto, ajuste_manual_mes,
     generar_cesiones_auxiliar, recalcular_cesion, importar_cesiones_excel,
 )
+from ..core.errores import detalle_usuario, error_http
+from ..core.subidas import leer_subida
 
 router = APIRouter(prefix="/presupuesto", tags=["Presupuestación"])
 
@@ -49,10 +51,7 @@ def iniciar_presupuesto(
     """RF-ING-01/03: crea el presupuesto único si el ejercicio base está cerrado."""
     ejercicio_base = ejercicio - 1
     if not verificar_ejercicio_base_cerrado(db, ejercicio_base):
-        raise HTTPException(
-            status_code=409,
-            detail=f"El ejercicio {ejercicio_base} no está cerrado. Cierra primero la carga base antes de presupuestar.",
-        )
+        raise error_http("PRE-002", ejercicio=ejercicio_base)
     presupuesto = crear_presupuesto(db, ejercicio, str(current_user.id))
     return _serializar_presupuesto(presupuesto)
 
@@ -114,7 +113,7 @@ def actualizar_ingreso(
     """RF-ING-17/18: actualiza parámetros de crecimiento de una línea y recalcula."""
     linea = _get_linea_ingreso(db, presupuesto_id, linea_id)
     if linea.bloqueado:
-        raise HTTPException(status_code=400, detail="La línea está bloqueada tras aprobación")
+        raise error_http("PRE-003")
 
     campos_permitidos = {
         'crecimiento_modelo', 'crecimiento_mercado', 'coeficiente_prudencia',
@@ -152,7 +151,7 @@ def aprobar_ingresos(
 
     lineas = db.query(PresupuestoIngreso).filter(PresupuestoIngreso.presupuesto_id == presupuesto_id).all()
     if not lineas:
-        raise HTTPException(status_code=400, detail="No hay líneas de ingresos generadas")
+        raise error_http("PRE-004")
 
     for l in lineas:
         l.bloqueado = True
@@ -174,7 +173,7 @@ def reabrir_ingresos(
     Si los gastos también estaban aprobados, los desbloquea también."""
     p = _get_presupuesto(db, presupuesto_id)
     if p.estado == EstadoPresupuesto.BORRADOR:
-        raise HTTPException(status_code=400, detail="El presupuesto de ingresos ya está abierto")
+        raise error_http("PRE-005")
 
     # Desbloquear ingresos
     db.query(PresupuestoIngreso).filter(
@@ -440,11 +439,11 @@ async def importar_ingresos(
     """Importa líneas de ingresos desde Excel. Borra las no bloqueadas y carga las del fichero."""
     p = _get_presupuesto(db, presupuesto_id)
     _validar_no_cerrado(p)
-    contenido = await file.read()
+    contenido = await leer_subida(file, (".xlsx", ".xls"), max_mb=20, esperado="Excel (.xlsx o .xls)")
     try:
         resultado = importar_lineas_ingresos_excel(db, p, contenido)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=detalle_usuario(exc))
     return resultado
 
 
@@ -495,7 +494,7 @@ def actualizar_regla_gasto(
     """RF-GAS-05 a RF-GAS-16: cambia la regla de proyección de una línea."""
     linea = _get_linea_gasto(db, presupuesto_id, linea_id)
     if linea.bloqueado:
-        raise HTTPException(status_code=400, detail="Línea bloqueada")
+        raise error_http("PRE-003")
 
     campos = {'tipo_regla', 'porcentaje_variacion', 'mes_inicio_variacion',
               'importe_anual_manual', 'distribucion', 'motivo_exclusion', 'notas'}
@@ -521,9 +520,9 @@ def ajuste_mes_manual(
     """RF-GAS-17/19: ajuste manual de un mes con trazabilidad."""
     linea = _get_linea_gasto(db, presupuesto_id, linea_id)
     if linea.bloqueado:
-        raise HTTPException(status_code=400, detail="Línea bloqueada")
+        raise error_http("PRE-003")
     if not (1 <= mes <= 12):
-        raise HTTPException(status_code=400, detail="Mes debe estar entre 1 y 12")
+        raise error_http("PRE-006")
 
     ajuste_manual_mes(db, linea, mes, nuevo_importe, mantener_total, current_user.username, motivo)
     return _serializar_gasto(linea)
@@ -590,7 +589,7 @@ def aprobar_gastos(
         PresupuestoGasto.familia_gasto == None,
     ).count()
     if sin_familia:
-        raise HTTPException(status_code=409, detail=f"Hay {sin_familia} líneas de gasto sin familia asignada")
+        raise error_http("PRE-007", n=sin_familia)
 
     lineas = db.query(PresupuestoGasto).filter(PresupuestoGasto.presupuesto_id == presupuesto_id).all()
     for l in lineas:
@@ -618,10 +617,7 @@ def reabrir_gastos(
         EstadoPresupuesto.CERRADO,
     )
     if p.estado not in estados_validos:
-        raise HTTPException(
-            status_code=400,
-            detail="Solo se pueden reabrir gastos cuando están aprobados, la tesorería aprobada o el presupuesto cerrado",
-        )
+        raise error_http("PRE-008")
 
     db.query(PresupuestoGasto).filter(
         PresupuestoGasto.presupuesto_id == presupuesto_id,
@@ -760,9 +756,9 @@ def cerrar_presupuesto(
     """Cierra definitivamente el presupuesto. Solo desde estado gastos_aprobados o tesoreria_aprobada."""
     p = _get_presupuesto(db, presupuesto_id)
     if p.estado == EstadoPresupuesto.CERRADO:
-        raise HTTPException(status_code=400, detail="El presupuesto ya está cerrado")
+        raise error_http("PRE-009")
     if p.estado == EstadoPresupuesto.BORRADOR:
-        raise HTTPException(status_code=400, detail="No se puede cerrar un presupuesto en borrador")
+        raise error_http("PRE-010")
     p.estado = EstadoPresupuesto.CERRADO
     p.cerrado_por_id = current_user.id
     p.cerrado_at = datetime.now(timezone.utc)
@@ -780,10 +776,7 @@ def cuenta_resultados(
     from ..services.cuenta_resultados import calcular_cuenta_resultados
     p = _get_presupuesto(db, presupuesto_id)
     if p.estado != EstadoPresupuesto.CERRADO:
-        raise HTTPException(
-            status_code=400,
-            detail=f"El presupuesto debe estar cerrado (estado actual: {p.estado.value})",
-        )
+        raise error_http("PRE-011", estado=p.estado.value)
     return calcular_cuenta_resultados(db, p)
 
 
@@ -830,9 +823,9 @@ def actualizar_cesion(
         PresupuestoCesionAuxiliar.presupuesto_id == presupuesto_id,
     ).first()
     if not c:
-        raise HTTPException(status_code=404, detail="Cesión no encontrada")
+        raise error_http("PRE-012")
     if c.bloqueado:
-        raise HTTPException(status_code=400, detail="Cesión bloqueada")
+        raise error_http("PRE-013")
 
     campos = {'tipo_persona', 'pct_comision', 'pct_retencion', 'notas'}
     for campo, valor in datos.items():
@@ -871,11 +864,11 @@ async def importar_cesiones(
     """Importa parámetros de cesiones (% comisión, tipo, retención) desde Excel."""
     p = _get_presupuesto(db, presupuesto_id)
     _validar_no_cerrado(p)
-    contenido = await file.read()
+    contenido = await leer_subida(file, (".xlsx", ".xls"), max_mb=20, esperado="Excel (.xlsx o .xls)")
     try:
         resultado = importar_cesiones_excel(db, p, contenido)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=detalle_usuario(exc))
     return resultado
 
 
@@ -886,7 +879,7 @@ async def importar_cesiones(
 def _get_presupuesto(db: Session, presupuesto_id: UUID) -> Presupuesto:
     p = db.query(Presupuesto).filter(Presupuesto.id == presupuesto_id).first()
     if not p:
-        raise HTTPException(status_code=404, detail="Presupuesto no encontrado")
+        raise error_http("PRE-001")
     return p
 
 
@@ -896,7 +889,7 @@ def _get_linea_ingreso(db: Session, presupuesto_id: UUID, linea_id: UUID) -> Pre
         PresupuestoIngreso.presupuesto_id == presupuesto_id,
     ).first()
     if not l:
-        raise HTTPException(status_code=404, detail="Línea no encontrada")
+        raise error_http("PRE-014")
     return l
 
 
@@ -906,13 +899,13 @@ def _get_linea_gasto(db: Session, presupuesto_id: UUID, linea_id: UUID) -> Presu
         PresupuestoGasto.presupuesto_id == presupuesto_id,
     ).first()
     if not l:
-        raise HTTPException(status_code=404, detail="Línea no encontrada")
+        raise error_http("PRE-014")
     return l
 
 
 def _validar_no_cerrado(p: Presupuesto):
     if p.estado == EstadoPresupuesto.CERRADO:
-        raise HTTPException(status_code=400, detail="El presupuesto está cerrado")
+        raise error_http("PRE-015")
 
 
 def _serializar_presupuesto(p: Presupuesto) -> dict:

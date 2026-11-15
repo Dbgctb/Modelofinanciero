@@ -27,6 +27,7 @@ from ..models.recibo import Recibo
 from ..models.diario import DiarioApunte, TipoCuenta, EstadoApunte
 from ..models.carga import CargaContable, TipoCarga, EstadoCarga
 from ..models.mercado import TasaMercadoRef, TipoTasaMercado
+from ..core.errores import ErrorApp
 
 log = logging.getLogger(__name__)
 
@@ -70,20 +71,6 @@ def _buscar_tasa_cached(filas: List, default_val: Optional[float], ramo: str) ->
         if fila.ramo_keyword and fila.ramo_keyword.lower() in ramo_l:
             return float(fila.tasa_pct)
     return default_val if default_val is not None else 0.0
-
-
-def get_mercado_referencia(ramo: str, db: Optional[Session] = None, ejercicio_base: Optional[int] = None) -> float:
-    if db is None or ejercicio_base is None:
-        return 0.0
-    filas, default_val = _preload_tasas_db(db, TipoTasaMercado.CRECIMIENTO, ejercicio_base)
-    return _buscar_tasa_cached(filas, default_val, ramo)
-
-
-def get_tasa_caida(ramo: str, tipo_negocio: str, db: Optional[Session] = None, ejercicio_base: Optional[int] = None) -> float:
-    if db is None or ejercicio_base is None:
-        return 0.0
-    filas, default_val = _preload_tasas_db(db, TipoTasaMercado.CAIDA_CARTERA, ejercicio_base)
-    return _buscar_tasa_cached(filas, default_val, ramo)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,25 +295,6 @@ def calcular_crecimiento_estadistico(por_mes: Dict[str, float]) -> float:
     x_mean, ss_xx = 6.5, 143.0
     ss_xy = sum((i + 1 - x_mean) * (v - media) for i, v in enumerate(valores))
     return round(max(-8.0, min(8.0, (ss_xy / ss_xx * 11 / media) * 100)), 4)
-
-
-def calcular_crecimiento_estadistico_interanual(db: Session, compania: str, ramo: str, ejercicio_base: int) -> float:
-    """Versión con query propia — usada desde recalcular_linea."""
-    tipos_validos = [TipoCarga.HISTORICO_ESTADISTICO, TipoCarga.BASE_PRESUPUESTARIA]
-    rows = (
-        db.query(DiarioApunte.ejercicio, func.sum(DiarioApunte.haber - DiarioApunte.debe))
-        .join(CargaContable, DiarioApunte.carga_id == CargaContable.id)
-        .filter(
-            DiarioApunte.compania == compania, DiarioApunte.ramo == ramo,
-            DiarioApunte.tipo_cuenta == TipoCuenta.INGRESO,
-            DiarioApunte.estado == EstadoApunte.CORRECTO,
-            CargaContable.tipo_carga.in_(tipos_validos),
-            CargaContable.ejercicio <= ejercicio_base,
-        )
-        .group_by(DiarioApunte.ejercicio).order_by(DiarioApunte.ejercicio).all()
-    )
-    totales = [(int(ej), float(t or 0)) for ej, t in rows if (t or 0) > 0]
-    return _calcular_crec_interanual(totales)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -749,7 +717,7 @@ def importar_lineas_ingresos_excel(db: Session, presupuesto: Presupuesto, conten
         if not compania_col: missing.append('Compañía')
         if not ramo_col:     missing.append('Ramo')
         if not linea_col:    missing.append('Línea')
-        raise ValueError(f"Columnas requeridas no encontradas: {', '.join(missing)}")
+        raise ErrorApp("PRE-017", faltan=", ".join(missing))
 
     def _f(val) -> float:
         try:

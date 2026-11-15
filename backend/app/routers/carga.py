@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Form, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
@@ -14,6 +14,7 @@ from ..models.diario import DiarioApunte, TipoCuenta, EstadoApunte
 from ..models.recibo import Recibo
 from ..services.carga_recibos import cargar_csv_recibos
 from ..services.carga_diario import procesar_diario_excel
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/carga", tags=["Carga de datos"])
 log = logging.getLogger(__name__)
@@ -53,11 +54,11 @@ async def upload_recibos(
     contenido = await file.read()
     if len(contenido) == 0:
         log.warning("ERR_CARGA_ARCHIVO_VACIO | fichero='%s'", file.filename)
-        raise HTTPException(status_code=400, detail="El archivo está vacío")
+        raise error_http("ARC-001")
     if file.content_type not in ALLOWED_CSV:
-        raise HTTPException(status_code=415, detail="Tipo de archivo no permitido. Se esperaba CSV.")
+        raise error_http("ARC-002", esperado="CSV")
     if len(contenido) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="Archivo demasiado grande (máximo 20 MB).")
+        raise error_http("ARC-003", max_mb=20)
 
     log.info("Carga recibos iniciada | fichero='%s' ejercicio=%d user='%s'",
              file.filename, ejercicio, current_user.username)
@@ -78,7 +79,7 @@ async def upload_recibos(
     except Exception as e:
         db.rollback()
         log.error("ERR_CARGA_PROCESO | fichero='%s' error='%s'", file.filename, str(e))
-        raise HTTPException(status_code=422, detail="Error procesando el archivo. Revisa el formato e inténtalo de nuevo.")
+        raise error_http("CAR-001")
 
     log.info("Carga recibos OK | carga_id='%s' insertados=%d actualizados=%d ejercicio=%d",
              carga.id, insertados, actualizados, ejercicio)
@@ -104,15 +105,15 @@ async def upload_diario(
     contenido = await file.read()
     if len(contenido) == 0:
         log.warning("ERR_CARGA_ARCHIVO_VACIO | fichero='%s'", file.filename)
-        raise HTTPException(status_code=400, detail="El archivo está vacío")
+        raise error_http("ARC-001")
 
     log.info("Carga diario iniciada | fichero='%s' ejercicio=%d tipo='%s' user='%s'",
              file.filename, ejercicio, tipo_carga, current_user.username)
 
     if file.content_type not in ALLOWED_EXCEL:
-        raise HTTPException(status_code=415, detail="Tipo de archivo no permitido. Se esperaba Excel (.xlsx).")
+        raise error_http("ARC-002", esperado="Excel (.xlsx)")
     if len(contenido) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="Archivo demasiado grande (máximo 20 MB).")
+        raise error_http("ARC-003", max_mb=20)
 
     # Eliminar cargas previas del mismo ejercicio+tipo para evitar duplicados.
     # No se hace commit intermedio: todo forma parte de la misma transacción.
@@ -142,7 +143,7 @@ async def upload_diario(
     except Exception as e:
         db.rollback()
         log.error("ERR_CARGA_PROCESO | fichero='%s' error='%s'", file.filename, str(e))
-        raise HTTPException(status_code=422, detail="Error procesando el archivo. Revisa el formato e inténtalo de nuevo.")
+        raise error_http("CAR-001")
 
     log.info("Carga diario OK | carga_id='%s' correctos=%d incidencias=%d",
              carga.id, correctos, con_incidencia)
@@ -225,7 +226,7 @@ def eliminar_historico(
         CargaContable.tipo_carga == TipoCarga.HISTORICO_ESTADISTICO,
     ).first()
     if not carga:
-        raise HTTPException(status_code=404, detail="Carga histórica no encontrada")
+        raise error_http("CAR-002")
 
     db.delete(carga)
     db.commit()
@@ -242,7 +243,7 @@ def eliminar_carga(
     """Elimina cualquier carga y sus apuntes asociados (en cascada)."""
     carga = db.query(CargaContable).filter(CargaContable.id == carga_id).first()
     if not carga:
-        raise HTTPException(status_code=404, detail="Carga no encontrada")
+        raise error_http("CAR-003")
 
     db.delete(carga)
     db.commit()
@@ -260,7 +261,7 @@ def purgar_ejercicio(
     """Elimina TODAS las cargas de un ejercicio (todos los tipos). Usar para limpiar datos incorrectos."""
     cargas = db.query(CargaContable).filter(CargaContable.ejercicio == ejercicio).all()
     if not cargas:
-        raise HTTPException(status_code=404, detail=f"No hay cargas para el ejercicio {ejercicio}")
+        raise error_http("CAR-004", ejercicio=ejercicio)
 
     cantidad = len(cargas)
     for c in cargas:
@@ -322,7 +323,7 @@ def resolver_incidencia(
         Incidencia.carga_id == carga_id,
     ).first()
     if not inc:
-        raise HTTPException(status_code=404, detail="Incidencia no encontrada")
+        raise error_http("CAR-005")
 
     inc.estado = EstadoIncidencia.RESUELTA
     inc.resolucion = resolucion
@@ -341,11 +342,11 @@ def cerrar_carga(
     """Cierra definitivamente una carga base presupuestaria para habilitar la presupuestación."""
     carga = db.query(CargaContable).filter(CargaContable.id == carga_id).first()
     if not carga:
-        raise HTTPException(status_code=404, detail="Carga no encontrada")
+        raise error_http("CAR-003")
     if carga.tipo_carga != TipoCarga.BASE_PRESUPUESTARIA:
-        raise HTTPException(status_code=400, detail="Solo se pueden cerrar cargas de tipo base presupuestaria")
+        raise error_http("CAR-006")
     if carga.estado == EstadoCarga.CERRADO:
-        raise HTTPException(status_code=400, detail="La carga ya está cerrada")
+        raise error_http("CAR-007")
 
     criticas_pendientes = db.query(Incidencia).filter(
         Incidencia.carga_id == carga_id,
@@ -353,10 +354,7 @@ def cerrar_carga(
         Incidencia.estado == EstadoIncidencia.PENDIENTE,
     ).count()
     if criticas_pendientes > 0:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Hay {criticas_pendientes} incidencias críticas pendientes. Resuélvelas antes de cerrar.",
-        )
+        raise error_http("CAR-008", n=criticas_pendientes)
 
     carga.estado = EstadoCarga.CERRADO
     db.commit()
@@ -381,7 +379,7 @@ def detalle_recibos(
         CargaContable.tipo_carga == TipoCarga.RECIBOS,
     ).first()
     if not carga:
-        raise HTTPException(status_code=404, detail="Carga de recibos no encontrada")
+        raise error_http("CAR-009")
 
     # Recibo.ejercicio es el año de efecto de cada recibo, no el de la carga (un
     # fichero trae varios años), así que el año es un filtro opcional.
@@ -443,7 +441,7 @@ def detalle_apuntes(
 ):
     carga = db.query(CargaContable).filter(CargaContable.id == carga_id).first()
     if not carga:
-        raise HTTPException(status_code=404, detail="Carga no encontrada")
+        raise error_http("CAR-003")
 
     q = db.query(DiarioApunte).filter(DiarioApunte.carga_id == carga_id)
     if estado:
@@ -504,7 +502,7 @@ def resumen_carga(
 ):
     carga = db.query(CargaContable).filter(CargaContable.id == carga_id).first()
     if not carga:
-        raise HTTPException(status_code=404, detail="Carga no encontrada")
+        raise error_http("CAR-003")
 
     pendientes_criticas = db.query(Incidencia).filter(
         Incidencia.carga_id == carga_id,

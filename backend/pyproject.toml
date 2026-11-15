@@ -1,0 +1,27 @@
+# Configuración de herramientas de desarrollo del backend (no es un paquete instalable).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+# Modo informe (auditoría 2026-11-15): errores reales (F), fallos probables (B),
+# seguridad tipo Bandit (S) y errores de sintaxis/E9. Ampliar cuando el código esté limpio.
+select = ["F", "E9", "B", "S"]
+ignore = [
+    "S101",  # assert: se usa en tests
+    "S608",  # SQL con f-string: revisado a mano en la auditoría, todo parametrizado
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# Patrón estándar de FastAPI: Depends()/Query()/File()... como valor por defecto (no es B008)
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.File", "fastapi.Form",
+                          "fastapi.Body", "fastapi.Path", "fastapi.params.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]  # contraseñas de prueba en los tests

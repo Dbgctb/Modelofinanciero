@@ -214,6 +214,14 @@ autorización del usuario.
 - Roles: `admin`, `gestor`, `lector`. Los endpoints sensibles usan `require_role(["admin"])`.
 - Rate limiting con `slowapi` en endpoints de login y recalcular.
 - Los errores internos nunca exponen detalle al cliente en producción.
+- **Catálogo de errores** (`app/core/errores.py`, documentado en `docs/CATALOGO_ERRORES.md`): todo error que ve el
+  usuario lleva código y sale como `"[CODIGO] mensaje"`. Nunca `raise ValueError("texto")` ni
+  `HTTPException(..., detail="texto")`:
+  - servicios → `raise ErrorApp("CC-IMP-003", faltan=...)` (hereda de `ValueError`, compatible con los `except ValueError`);
+  - routers → `raise error_http("USR-003")` (estado HTTP del catálogo);
+  - al reenviar un `ValueError` capturado → `detail=detalle_usuario(e)` (si no es del catálogo, lo registra y muestra `GEN-004`).
+  - Error nuevo: entrada en `_ENTRADAS` y `venv\Scripts\python scripts\catalogo_errores.py --escribir`. El mismo script
+    sin argumentos comprueba códigos, parámetros, textos literales pendientes y que el documento está al día.
 
 ### Frontend
 - El cliente axios está en `api/client.ts` — maneja refresh token y redirección a `/login` en 401.
@@ -254,11 +262,16 @@ LOCKOUT_MINUTES=15
 Antes de dar por terminado cualquier cambio, verificar obligatoriamente:
 
 1. **Backend compila** — `uvicorn app.main:app --reload` arranca sin errores de importación ni de SQLAlchemy.
-2. **Migraciones de BD** — si se añade una columna a una tabla existente, añadir un `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` en el bloque de migraciones de `main.py`. `create_all` solo crea tablas nuevas, no columnas.
+2. **Migraciones de BD** — si se añade una columna a una tabla existente, añadir un `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` en `_MIGRACIONES_INCREMENTALES` de `main.py` (se aplican al arrancar, en `preparar_base_de_datos()`). `create_all` solo crea tablas nuevas, no columnas.
 3. **Frontend compila** — `npx tsc --noEmit` sin errores TypeScript, o `npm run build` limpio.
 4. **No variables indefinidas** — revisar que toda variable usada en el código Python esté definida en el scope correcto.
 5. **Rutas y menú coherentes** — si se añade una página nueva, verificar que existe la ruta en `App.tsx` y el ítem en `AppLayout.tsx`.
 6. **Señales de fuga** — si se añade una señal nueva, añadirla en `SENAL_CONFIG` de `FugaAlertas.tsx`.
+7. **Tests** — `venv\Scripts\python -m pytest` en `backend/` sin fallos (no tocan la BD; ver README § Tests).
+   Lógica nueva o bug corregido → test nuevo en `backend/tests/`. `test_permisos.py` falla si se añade un
+   endpoint sin sesión o un DELETE sin rol: si una ruta pública nueva es intencionada, añadirla a `PUBLICOS`.
+8. **Lint sin errores nuevos** — `ruff check app scripts tests` (backend) y `npm run lint` (frontend) están en
+   modo informe: no añadir avisos nuevos en el código que se toque.
 
 ---
 

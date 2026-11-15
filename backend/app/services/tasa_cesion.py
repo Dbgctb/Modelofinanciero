@@ -117,16 +117,6 @@ TASA_AUX_CTE = """
 TASA_EXPR = "COALESCE(ta.tasa, :tasa)"
 
 
-def tasas_por_auxiliar(db: Session, ejercicio: int) -> dict[str, tuple[float, str]]:
-    """Tasa de cada auxiliar que tiene una propia (0–1) y su origen: 'real' o 'catalogo'.
-    Los que no aparecen usan la tasa de respaldo."""
-    rows = db.execute(
-        _text("WITH " + TASA_AUX_CTE + " SELECT ente, tasa, origen FROM tasa_aux WHERE tasa IS NOT NULL"),
-        {"ej": ejercicio},
-    ).fetchall()
-    return {r[0]: (round(float(r[1]), 4), r[2]) for r in rows}
-
-
 def tasa_cesion_real(db: Session, ejercicio: int) -> float:
     return detalle_tasa_cesion_real(db, ejercicio)["tasa"]
 

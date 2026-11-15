@@ -20,6 +20,7 @@ from ..models.recibo import Recibo
 from ..models.user import User
 from ..services.carga_clientes import cargar_csv_clientes
 from ..services.cross_selling import DEFAULT_MATRIZ, recalcular_cross_selling, calcular_ramo_stats
+from ..core.errores import detalle_usuario, error_http
 
 log = logging.getLogger(__name__)
 
@@ -200,7 +201,7 @@ def recalcular(
     except Exception as e:
         db.rollback()
         log.error("ERR_CS_RECALCULAR | ejercicio=%d error=%s", ejercicio, str(e))
-        raise HTTPException(status_code=500, detail="Error al recalcular. Revisa los logs.")
+        raise error_http("CRS-001")
 
 
 @router.get("/oportunidades")
@@ -358,7 +359,7 @@ def calcular_stats_ramo(
     except Exception as e:
         db.rollback()
         log.error("ERR_RAMO_STATS | ejercicio=%d error=%s", ejercicio, str(e))
-        raise HTTPException(status_code=500, detail="Error al calcular estadísticas de ramo.")
+        raise error_http("CRS-002")
 
 
 @router.get("/ocurrencias")
@@ -513,22 +514,22 @@ async def upload_clientes(
 ):
     contenido = await file.read()
     if len(contenido) == 0:
-        raise HTTPException(status_code=400, detail="El archivo está vacío")
+        raise error_http("ARC-001")
     if file.content_type not in ALLOWED_CLIENT_MIME:
-        raise HTTPException(status_code=415, detail="Tipo de archivo no permitido. Se esperaba CSV o Excel.")
+        raise error_http("ARC-002", esperado="CSV o Excel")
     if len(contenido) > MAX_CLIENT_FILE:
-        raise HTTPException(status_code=413, detail="Archivo demasiado grande (máximo 10 MB).")
+        raise error_http("ARC-003", max_mb=10)
 
     try:
         insertados, actualizados = cargar_csv_clientes(db, contenido)
         db.commit()
     except ValueError as e:
         db.rollback()
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=detalle_usuario(e))
     except Exception as e:
         db.rollback()
         log.error("ERR_CARGA_CLIENTES | fichero='%s' error='%s'", file.filename, str(e))
-        raise HTTPException(status_code=422, detail="Error procesando el archivo de clientes.")
+        raise error_http("CRS-003")
 
     return {
         "mensaje": f"Clientes cargados correctamente",
@@ -661,7 +662,7 @@ def update_accion(
     from datetime import datetime, timezone
     accion = db.query(AccionComercial).filter(AccionComercial.id == accion_id).first()
     if not accion:
-        raise HTTPException(status_code=404, detail="Acción no encontrada")
+        raise error_http("CRS-004")
 
     if data.estado is not None:
         accion.estado = data.estado

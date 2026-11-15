@@ -198,12 +198,7 @@ def _compute_weights(recibos_list, driver: str) -> dict:
     return {k: v / total for k, v in totals.items() if v > 0}
 
 
-
 # ── Recálculo ─────────────────────────────────────────────────────────────────
-
-def _build_row(base: dict, extra: dict) -> dict:
-    r = {**base, **extra, "id": _uuid_mod.uuid4()}
-    return r
 
 
 def _recalcular_worker(db: Session, ejercicio: int, task_id: str):

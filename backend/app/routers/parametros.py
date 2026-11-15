@@ -10,6 +10,7 @@ from ..core.database import get_db
 from ..core.dependencies import get_current_user, require_admin, require_gestor_or_admin
 from ..models.user import User
 from ..models.parametros import MapCuentaContable, TipoCuentaParam
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/parametros", tags=["Parámetros"])
 log = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ def crear_cuenta(
 ):
     if db.query(MapCuentaContable).filter(MapCuentaContable.numero_cuenta == payload.numero_cuenta).first():
         log.warning("ERR_MAPEO_DUPLICADO | cuenta='%s'", payload.numero_cuenta)
-        raise HTTPException(status_code=400, detail="Ya existe un mapeo para esa cuenta")
+        raise error_http("MAP-001")
 
     _validar_campos(payload.tipo, payload.compania, payload.familia_gasto)
 
@@ -130,7 +131,7 @@ def actualizar_cuenta(
 ):
     mapa = db.query(MapCuentaContable).filter(MapCuentaContable.id == cuenta_id).first()
     if not mapa:
-        raise HTTPException(status_code=404, detail="Mapeo no encontrado")
+        raise error_http("MAP-002")
 
     datos = payload.model_dump(exclude_none=True)
     tipo_final = datos.get("tipo", mapa.tipo)
@@ -153,7 +154,7 @@ def eliminar_cuenta(
 ):
     mapa = db.query(MapCuentaContable).filter(MapCuentaContable.id == cuenta_id).first()
     if not mapa:
-        raise HTTPException(status_code=404, detail="Mapeo no encontrado")
+        raise error_http("MAP-002")
     db.delete(mapa)
     db.commit()
 
@@ -210,6 +211,6 @@ def importar_lote(
 
 def _validar_campos(tipo: TipoCuentaParam, compania: Optional[str], familia: Optional[str]):
     if tipo == TipoCuentaParam.INGRESO and not compania:
-        raise HTTPException(status_code=400, detail="Las cuentas de ingreso requieren compañía")
+        raise error_http("MAP-003")
     if tipo == TipoCuentaParam.GASTO and not familia:
-        raise HTTPException(status_code=400, detail="Las cuentas de gasto requieren familia de gasto")
+        raise error_http("MAP-004")

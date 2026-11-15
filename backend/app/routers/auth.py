@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 import hashlib
@@ -17,6 +17,7 @@ from ..schemas.auth import (
 )
 from ..core.limiter import limiter
 import secrets
+from ..core.errores import error_http
 
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
 
@@ -25,6 +26,11 @@ router = APIRouter(prefix="/auth", tags=["Autenticación"])
 # admin en GET /users/reset-requests, que lo relaya al usuario. 60 minutos
 # de validez, igual de corto que un enlace de email real.
 RESET_TOKEN_TTL_MINUTES = 60
+
+# Hash bcrypt de una contraseña aleatoria: si el usuario no existe se verifica contra él,
+# para que el login tarde lo mismo exista o no (evita averiguar usuarios por el tiempo).
+_HASH_FICTICIO = hash_password(secrets.token_urlsafe(16))
+REUSO_GRACIA_S = 30
 
 
 def _log(db: Session, action: str, user: User = None, request: Request = None, detail: str = None):
@@ -52,16 +58,14 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     ).first()
 
     if not user or not user.is_active:
+        verify_password(payload.password, _HASH_FICTICIO)  # mismo coste que un usuario real
         _log(db, "LOGIN_FAILED", detail=f"Usuario no encontrado: {payload.username}", request=request)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales incorrectas")
+        raise error_http("AUTH-001")
 
     # Verificar bloqueo
     if user.locked_until and user.locked_until > datetime.now(timezone.utc):
         remaining = int((user.locked_until - datetime.now(timezone.utc)).total_seconds() / 60)
-        raise HTTPException(
-            status_code=status.HTTP_423_LOCKED,
-            detail=f"Cuenta bloqueada. Inténtalo en {remaining} minutos",
-        )
+        raise error_http("AUTH-002", minutos=remaining)
 
     if not verify_password(payload.password, user.hashed_password):
         user.failed_login_attempts += 1
@@ -70,14 +74,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             user.failed_login_attempts = 0
             db.commit()
             _log(db, "ACCOUNT_LOCKED", user=user, request=request)
-            raise HTTPException(
-                status_code=status.HTTP_423_LOCKED,
-                detail=f"Cuenta bloqueada por {settings.LOCKOUT_MINUTES} minutos tras demasiados intentos fallidos",
-            )
+            raise error_http("AUTH-003", minutos=settings.LOCKOUT_MINUTES)
         db.commit()
         _log(db, "LOGIN_FAILED", user=user, request=request,
              detail=f"Intento {user.failed_login_attempts}/{settings.MAX_LOGIN_ATTEMPTS}")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales incorrectas")
+        raise error_http("AUTH-001")
 
     # Login exitoso
     user.failed_login_attempts = 0
@@ -105,20 +106,36 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     decoded = decode_token(payload.refresh_token)
     if not decoded or decoded.get("type") != "refresh":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token inválido")
+        raise error_http("AUTH-006")
 
     token_hash = _hash_token(payload.refresh_token)
-    stored = db.query(RefreshToken).filter(
-        RefreshToken.token_hash == token_hash,
-        RefreshToken.revoked == False,
-    ).first()
+    stored = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
 
     if not stored:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token revocado o inválido")
+        raise error_http("AUTH-007")
+    if stored.revoked:
+        # Un refresh token ya rotado que vuelve a usarse indica que alguien lo copió:
+        # se cierran todas las sesiones del usuario (el legítimo tendrá que volver a entrar).
+        # Excepción: si acaba de emitirse un token nuevo (< REUSO_GRACIA_S), es una carrera
+        # inocente (p. ej. una pestaña duplicada comparte el sessionStorage y renueva a la vez).
+        reciente = db.query(RefreshToken).filter(
+            RefreshToken.user_id == stored.user_id,
+            RefreshToken.created_at > datetime.now(timezone.utc) - timedelta(seconds=REUSO_GRACIA_S),
+        ).first()
+        if reciente:
+            raise error_http("AUTH-007")
+        n = db.query(RefreshToken).filter(
+            RefreshToken.user_id == stored.user_id, RefreshToken.revoked == False,
+        ).update({"revoked": True})
+        db.commit()
+        reusado = db.query(User).filter(User.id == stored.user_id).first()
+        _log(db, "REFRESH_TOKEN_REUSED", user=reusado, request=request,
+             detail=f"Refresh token revocado reutilizado; {n} sesiones cerradas")
+        raise error_http("AUTH-007")
 
     user = db.query(User).filter(User.id == decoded["sub"], User.is_active == True).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inactivo")
+        raise error_http("AUTH-008")
 
     # Rotación: revocar el anterior y emitir uno nuevo
     stored.revoked = True
@@ -162,7 +179,7 @@ def change_password(
     db: Session = Depends(get_db),
 ):
     if not verify_password(payload.current_password, current_user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Contraseña actual incorrecta")
+        raise error_http("AUTH-009")
 
     current_user.hashed_password = hash_password(payload.new_password)
     current_user.must_change_password = False
@@ -212,11 +229,11 @@ def reset_password_with_token(payload: ResetPasswordRequest, request: Request, d
     prt = db.query(PasswordResetToken).filter(PasswordResetToken.token == payload.token).first()
     now = datetime.now(timezone.utc)
     if not prt or prt.used or prt.expires_at < now:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El enlace no es válido o ha caducado. Pide uno nuevo.")
+        raise error_http("AUTH-010")
 
     user = db.query(User).filter(User.id == prt.user_id, User.is_active == True).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El enlace no es válido o ha caducado. Pide uno nuevo.")
+        raise error_http("AUTH-010")
 
     user.hashed_password = hash_password(payload.new_password)
     user.must_change_password = False

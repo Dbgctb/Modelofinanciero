@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint src"
   },
   "dependencies": {
     "@ant-design/icons": "^5.3.7",
@@ -18,14 +19,19 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.23.1",
     "recharts": "^2.12.7",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zustand": "^4.5.2"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.5",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",
+    "eslint": "9.39.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.14.0",
     "typescript": "^5.4.5",
+    "typescript-eslint": "8.72.2",
     "vite": "^5.2.13"
   }
 }
