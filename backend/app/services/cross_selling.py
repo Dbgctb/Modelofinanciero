@@ -601,7 +601,7 @@ def _oportunidades_cliente(ctx: _Contexto, cli: dict, port: dict) -> list[CrossS
         if ramo_obj in ramos_vigentes or ramo_obj not in permitidos:  # ya lo tiene / no adecuado
             continue
         mejor_afinidad, mejor_desc = 0.0, ""
-        for ramo_base in ramos_vigentes:
+        for ramo_base in sorted(ramos_vigentes):  # orden fijo: en un empate gana siempre el mismo motivo
             af = ctx.afinidad_dict.get((ramo_base, ramo_obj), 0.0)
             if af > mejor_afinidad:
                 mejor_afinidad, mejor_desc = af, ctx.afinidad_desc.get((ramo_base, ramo_obj), "")
