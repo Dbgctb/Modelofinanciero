@@ -9,13 +9,13 @@ Los valores entre llaves (`{faltan}`, `{n}`…) se sustituyen por los datos conc
 ## Índice
 
 - [GEN · General](#gen--general) (4)
-- [CFG · Configuración del servidor](#cfg--configuración-del-servidor) (3)
+- [CFG · Configuración del servidor](#cfg--configuración-del-servidor) (4)
 - [ARC · Subida de archivos (común)](#arc--subida-de-archivos-común) (3)
 - [AUTH · Autenticación](#auth--autenticación) (11)
 - [USR · Usuarios](#usr--usuarios) (8)
 - [MAP · Mapeo de cuentas](#map--mapeo-de-cuentas) (4)
 - [CAR · Carga de datos](#car--carga-de-datos) (9)
-- [ADM · Administración](#adm--administración) (6)
+- [ADM · Administración](#adm--administración) (7)
 - [ANA · Analítico](#ana--analítico) (5)
 - [CRS · Cross-selling](#crs--cross-selling) (6)
 - [PRE · Presupuesto](#pre--presupuesto) (17)
@@ -45,6 +45,7 @@ Los valores entre llaves (`{faltan}`, `{n}`…) se sustituyen por los datos conc
 | `CFG-001` | 500 | SECRET_KEY debe tener al menos 32 caracteres | Pon en backend/.env una SECRET_KEY aleatoria de 64 caracteres. |
 | `CFG-002` | 500 | ALLOWED_ORIGINS no puede contener '*' — especifica dominios concretos | Lista en ALLOWED_ORIGINS solo los dominios del frontend (p. ej. http://localhost:5173). |
 | `CFG-003` | 500 | ALGORITHM no válido ({valor}): debe ser HS256, HS384 o HS512 | Pon ALGORITHM=HS256 en backend/.env. |
+| `CFG-004` | 500 | La base de datos está en la revisión {actual} y el código espera {esperada} | Haz copia de seguridad y aplica las migraciones desde backend/: venv\Scripts\python -m alembic upgrade head. Si la base es anterior a la migración base (revisión e0af6e045937), ver la cabecera de alembic/versions/0001_base_esquema_completo.py. |
 
 ## ARC — Subida de archivos (común)
 
@@ -116,6 +117,7 @@ Los valores entre llaves (`{faltan}`, `{n}`…) se sustituyen por los datos conc
 | `ADM-004` | 404 | Registro no encontrado | Recarga la lista. |
 | `ADM-005` | 422 | No se pudo leer el archivo. Debe ser un CSV con columnas auxiliar y comisión colaborador. | Revisa separador y columnas del CSV. |
 | `ADM-006` | 422 | Columnas requeridas no encontradas: {faltan}. Columnas detectadas: {detectadas} | Renombra las columnas del fichero como indica el mensaje. |
+| `ADM-007` | 400 | Confirmación incorrecta: escribe {frase} para borrar los datos | El reset exige la frase de confirmación también en el servidor. Haz antes una copia de seguridad. |
 
 ## ANA — Analítico
 

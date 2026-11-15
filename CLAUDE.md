@@ -159,10 +159,10 @@ Código;Nombre;F.Alta;F.Nacimie;Fis/Jur;T. Fijo;T. Móvil;E-Mail
 **Importante**: `dias_vencimiento` usa `min(hasta)` de pólizas vigentes, no `max(hasta)`. Usar `max` ocultaba vencimientos inminentes de pólizas secundarias.
 
 ### Campos de `FugaAlerta`
-`tipo_cliente`, `auxiliar`, `ramos_actuales` se rellenan en cada "Recalcular". Si se añade un campo nuevo, siempre añadir `ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS ...` en `main.py`.
+`tipo_cliente`, `auxiliar`, `ramos_actuales` se rellenan en cada "Recalcular". Si se añade un campo nuevo, crear una migración de Alembic (ver "Control de calidad", punto 2).
 
 ### Flujo tras cambios en el motor
-1. Reiniciar backend (ejecuta migraciones `ALTER TABLE`).
+1. Si cambió el esquema: `python -m alembic upgrade head` y reiniciar el backend.
 2. Pulsar **Recalcular** en UI → regenera `cross_selling_oportunidades` y `fuga_alertas` con todos los campos actualizados.
 
 ---
@@ -174,7 +174,7 @@ Punteo del diario completo y conciliación bancaria. Reconstruye en PostgreSQL e
 **`docs/PLAN_CIERRES_CONTABILIDAD.md`** (leerlo antes de tocar el módulo).
 
 ### Datos
-- Tablas propias `cc_*` (migración Alembic `e0af6e045937`). **No tienen relación con `diario_apuntes`**, que solo
+- Tablas propias `cc_*` (creadas originalmente por la migración `e0af6e045937`; hoy en la migración base `0001_base`). **No tienen relación con `diario_apuntes`**, que solo
   guarda los grupos 6/7 para la Cuenta de Resultados y el Analítico.
 - Columnas con los nombres del original (`reconciled`, `recon_rule`, `recon_group_id`…) e ids de apunte originales:
   los referencian sin clave foránea `cc_emparejamientos_h.cobro_id`, `cc_incidencias.line_ids` y
@@ -262,7 +262,12 @@ LOCKOUT_MINUTES=15
 Antes de dar por terminado cualquier cambio, verificar obligatoriamente:
 
 1. **Backend compila** — `uvicorn app.main:app --reload` arranca sin errores de importación ni de SQLAlchemy.
-2. **Migraciones de BD** — si se añade una columna a una tabla existente, añadir un `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` en `_MIGRACIONES_INCREMENTALES` de `main.py` (se aplican al arrancar, en `preparar_base_de_datos()`). `create_all` solo crea tablas nuevas, no columnas.
+2. **Migraciones de BD — solo Alembic** (desde 2026-11-15; antes había `create_all` y `ALTER` al arrancar y el
+   historial no podía crear la base desde cero). Cualquier cambio de modelo (tabla, columna, índice):
+   `python -m alembic revision --autogenerate -m "..."`, **revisar** el fichero generado, copia de seguridad,
+   `python -m alembic upgrade head`, y comprobar con `python -m alembic check` (debe decir "No new upgrade
+   operations"). Nunca `create_all` ni DDL en el código. El backend no arranca si la base no está en la última
+   revisión (`CFG-004`). La migración base `0001_base` no se puede deshacer (borraría todo).
 3. **Frontend compila** — `npx tsc --noEmit` sin errores TypeScript, o `npm run build` limpio.
 4. **No variables indefinidas** — revisar que toda variable usada en el código Python esté definida en el scope correcto.
 5. **Rutas y menú coherentes** — si se añade una página nueva, verificar que existe la ruta en `App.tsx` y el ítem en `AppLayout.tsx`.

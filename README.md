@@ -23,10 +23,14 @@ pip install -r requirements.txt
 copy .env.example .env
 # Editar .env con tu DATABASE_URL y SECRET_KEY
 
-# 4. Crear el primer administrador
+# 4. Crear las tablas (o actualizar el esquema tras un cambio de versión)
+#    Haz antes una copia de seguridad si la base ya tiene datos.
+python -m alembic upgrade head
+
+# 5. Crear el primer administrador
 python create_admin.py
 
-# 5. Arrancar servidor
+# 6. Arrancar servidor (se niega a arrancar si la base no está en la última migración: CFG-004)
 uvicorn app.main:app --reload
 # API disponible en http://localhost:8000
 # Docs en http://localhost:8000/api/docs

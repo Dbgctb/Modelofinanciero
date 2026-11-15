@@ -11,7 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from .core.limiter import limiter
 
 from .core.config import settings
-from .core.database import Base, engine
+from .core.database import engine
 from .core.errores import ErrorApp, texto
 from .core.logging_config import setup_logging
 from .routers import auth, users, carga, parametros, presupuesto, tesoreria, real, kpis, analitico, admin, rentabilidad, cuadre, cross_selling, cierres, cierres_banco, cierres_herramientas
@@ -19,36 +19,35 @@ from .routers import auth, users, carga, parametros, presupuesto, tesoreria, rea
 setup_logging()
 log = logging.getLogger(__name__)
 
-_MIGRACIONES_INCREMENTALES = [
-    "ALTER TABLE ramo_stats_ejercicio ADD COLUMN IF NOT EXISTS ramo_categoria VARCHAR(100)",
-    "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono_fijo VARCHAR(30)",
-    "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono_movil VARCHAR(30)",
-    "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email VARCHAR(200)",
-    "ALTER TABLE cross_selling_oportunidades ADD COLUMN IF NOT EXISTS subramos_vigentes JSONB",
-    "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS tipo_cliente VARCHAR(20)",
-    "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS auxiliar VARCHAR(150)",
-    "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS ramos_actuales JSONB",
-    "ALTER TABLE fuga_alertas ADD COLUMN IF NOT EXISTS liqui_vigente FLOAT",
-]
+def comprobar_revision(actual: str | None, esperada: str) -> None:
+    """Lanza CFG-004 si la base no está en la última migración de Alembic."""
+    if actual != esperada:
+        raise ErrorApp("CFG-004", actual=actual or "ninguna", esperada=esperada)
 
 
-def preparar_base_de_datos() -> None:
-    """Crea las tablas que falten y aplica las migraciones incrementales (idempotente).
+def verificar_base_de_datos() -> None:
+    """Al arrancar: la base debe estar en la última migración (no se crea ni se altera nada).
 
-    Se ejecuta al arrancar el servidor (lifespan), no al importar el módulo: así los tests
-    pueden cargar la aplicación sin tocar la base de datos.
+    El esquema lo gestiona SOLO Alembic (auditoría, fase 3). Antes el arranque ejecutaba
+    create_all() y una lista de ALTER TABLE, y el historial de migraciones no podía crear
+    la base desde cero. Las migraciones se aplican a mano: `python -m alembic upgrade head`.
     """
-    from sqlalchemy import text as _sql
-    Base.metadata.create_all(bind=engine)
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    esperada = ScriptDirectory.from_config(cfg).get_current_head()
     with engine.connect() as conn:
-        for stmt in _MIGRACIONES_INCREMENTALES:  # ADD COLUMN IF NOT EXISTS es idempotente
-            conn.execute(_sql(stmt))
-        conn.commit()
+        actual = MigrationContext.configure(conn).get_current_revision()
+    comprobar_revision(actual, esperada)
+    log.info("Base de datos en la revisión %s (última)", actual)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    preparar_base_de_datos()
+    verificar_base_de_datos()
     yield
 
 

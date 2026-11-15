@@ -1,7 +1,7 @@
 import logging
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, Body
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, Body, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -9,6 +9,7 @@ from sqlalchemy import text
 from ..core.database import get_db
 from ..core.dependencies import require_admin
 from ..models.user import User
+from ..models.audit import AuditLog
 from ..models.mercado import TasaMercadoRef, TipoTasaMercado
 from ..models.auxiliares import AuxiliarComisionRef
 from ..data.tasas_mercado_icea import TASAS_ICEA
@@ -206,10 +207,19 @@ def poblar_tasas_icea(
     return {"insertados": insertados, "omitidos": omitidos}
 
 
+FRASE_RESET = "LIMPIAR"
+
+
+class ConfirmacionReset(BaseModel):
+    confirmacion: str
+
+
 @router.post("/reset-datos")
 def reset_datos(
+    body: ConfirmacionReset,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    user: User = Depends(require_admin),
 ):
     """
     Elimina todas las cargas (diarios, recibos, apuntes, incidencias).
@@ -234,6 +244,11 @@ def reset_datos(
        de verdad importa (las tablas grandes) y dejar el DELETE solo para
        la tabla pequeña, donde el coste es irrelevante.
     """
+    # La confirmación se exige también en el servidor (antes solo la pedía la pantalla):
+    # una petición directa al endpoint no puede borrar todo sin la frase.
+    if body.confirmacion != FRASE_RESET:
+        raise error_http("ADM-007", frase=FRASE_RESET)
+
     # Conteos aproximados desde pg_stat (instantáneo, no hace full scan)
     rows = db.execute(text(
         "SELECT relname, n_live_tup::bigint FROM pg_stat_user_tables "
@@ -248,7 +263,15 @@ def reset_datos(
     db.execute(text("TRUNCATE TABLE incidencias, fact_resultado_analitico, diario_apuntes, recibos"))
     # cargas_contables sí la referencia meses_reales (ya desvinculada arriba) -> DELETE, pero solo 8 filas.
     db.execute(text("DELETE FROM cargas_contables"))
-    db.commit()
+    db.add(AuditLog(
+        user_id=user.id, username=user.username, action="RESET_DATOS",
+        detail=(f"cargas={stats.get('cargas_contables', 0)} recibos={stats.get('recibos', 0)} "
+                f"apuntes={stats.get('diario_apuntes', 0)} incidencias={stats.get('incidencias', 0)} (aprox.)"),
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    ))
+    db.commit()  # el registro de auditoría va en la misma transacción que el borrado
+    log.warning("RESET DE DATOS ejecutado por '%s': %s", user.username, stats)
 
     return {
         "mensaje": "Datos eliminados correctamente",

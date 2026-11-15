@@ -44,32 +44,6 @@ from .tasa_cesion import resolver_tasa, TASA_AUX_CTE, TASA_EXPR
 MIN_COMISION_DEFAULT = 0.0
 # Tasa de cesión estimada por defecto: la real del ejercicio (ver tasa_cesion.py).
 
-_indexes_ensured = False
-
-def _ensure_indexes(db: Session) -> None:
-    global _indexes_ensured
-    if _indexes_ensured:
-        return
-    try:
-        db.execute(_text(
-            "CREATE INDEX IF NOT EXISTS idx_fra_ejercicio "
-            "ON fact_resultado_analitico(ejercicio)"
-        ))
-        db.execute(_text(
-            "CREATE INDEX IF NOT EXISTS idx_fra_ej_rid "
-            "ON fact_resultado_analitico(ejercicio, recibo_id) WHERE recibo_id IS NOT NULL"
-        ))
-        db.execute(_text(
-            "CREATE INDEX IF NOT EXISTS idx_rec_tomador "
-            "ON recibos(tomador) WHERE tomador IS NOT NULL AND tomador != ''"
-        ))
-        db.commit()
-    except Exception:
-        db.rollback()
-    finally:
-        _indexes_ensured = True
-
-
 def _clase(pct: float) -> str:
     if pct >= 25: return "A"
     if pct >= 10: return "B"
@@ -109,7 +83,6 @@ def calcular_rentabilidad_clientes(
 ) -> dict:
 
     tasa_cesion_estimada = resolver_tasa(db, ejercicio, tasa_cesion_estimada)
-    _ensure_indexes(db)
 
     # ── 1. Totales globales del ejercicio ────────────────────────────────────
     # SQL idéntico al de dashboard_ejecutivo (modelo analítico) para garantizar
@@ -583,7 +556,6 @@ def ejercicios_disponibles(db: Session) -> list[int]:
 def recibos_por_cliente(db: Session, ejercicio: int, tomador: str) -> list:
     """Desglose por recibo: ingreso y cesión real (cuenta 623*) para un tomador.
     Cuando tomador == '__SIN_CLIENTE__' devuelve los apuntes sin recibo vinculado."""
-    _ensure_indexes(db)
 
     if tomador == "__SIN_CLIENTE__":
         rows = _q(db, """

@@ -2,7 +2,7 @@
 Modelos del Modelo Analítico de Rentabilidad.
 Tablas: analitico_map_cuentas, analitico_map_drivers, fact_resultado_analitico
 """
-from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, Date, ForeignKey, Index
+from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, Date, ForeignKey, Index, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -122,6 +122,13 @@ class FactResultadoAnalitico(Base):
         Index("ix_fact_ejercicio_tipo_nat",   "ejercicio", "tipo_cuenta", "naturaleza"),
         # Cubre el JOIN con recibos en rentabilidad_cliente
         Index("ix_fact_ejercicio_recibo",     "ejercicio", "recibo_id"),
+        # Existían en la BD sin declarar (antiguo .sql manual y rentabilidad_cliente._ensure_indexes)
+        Index("ix_fact_tipo_cuenta",          "tipo_cuenta"),
+        Index("ix_fact_naturaleza",           "naturaleza"),
+        Index("ix_fact_recibo_id",            "recibo_id"),
+        Index("idx_fra_ejercicio",            "ejercicio"),
+        Index("idx_fra_ej_rid",               "ejercicio", "recibo_id",
+              postgresql_where=text("recibo_id IS NOT NULL")),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Numeric, Date, DateTime, Boolean
+from sqlalchemy import Column, String, Integer, Numeric, Date, DateTime, Boolean, Index, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -7,6 +7,10 @@ from ..core.database import Base
 
 class Recibo(Base):
     __tablename__ = "recibos"
+    __table_args__ = (
+        # Existía en la BD sin declarar (lo creaba rentabilidad_cliente._ensure_indexes)
+        Index("idx_rec_tomador", "tomador", postgresql_where=text("tomador IS NOT NULL AND tomador <> ''")),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ejercicio = Column(Integer, nullable=False, index=True)

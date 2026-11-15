@@ -32,7 +32,23 @@
 - **Ruff:** 79 avisos reales una vez descartados los 406 falsos positivos de FastAPI (B008). Los 2 B023 del punteo son falsos positivos (la función se usa en la misma iteración). Quedan: 29 imports y 6 variables sin usar, 15 `zip` sin `strict`, 10 `raise` sin `from`, 5 `except` que ocultan errores.
 - **ESLint:** 0 errores, 729 avisos: 721 `any` y 8 dependencias de `useEffect`/`useMemo` (4 por `ejercicio` que no se recarga al cambiar). Las reglas de hooks de React no tienen ninguna violación. El `catch {}` del sondeo de tareas en `DashboardsAnalitico.tsx` oculta errores de red.
 
-**Pendiente:** fases 3 a 5 (D1, Q2, S4, Q3), S7, S8, D4 y los avisos de Ruff/ESLint. `pip-audit` no ejecutado.
+## Estado tras la fase 3 (2026-11-15)
+
+**Hallazgo que cambió el plan:** el historial de Alembic **no podía crear la base desde cero**: 14 de las 46 tablas (`clientes`, `fact_resultado_analitico`, `password_reset_tokens`…) solo existían por el `create_all()` del arranque. Había además un quinto y un sexto mecanismo de esquema: `rentabilidad_cliente._ensure_indexes` creaba índices al ejecutarse y `create_admin.py` llamaba a `create_all()`.
+
+| Punto | Qué se hizo | Verificación |
+|---|---|---|
+| Copia previa | `pg_dump` completo en `Antigravity/_archivo/backups_modelo_financiero/correduria_db_antes_fase3_20261115.dump` (24 MB) | `pg_restore -l`: 47 tablas con datos, 49 índices |
+| Q2 | Las 17 migraciones, el `.sql` manual y su ejecutor, sustituidos por **una migración base** (`0001_base`) generada de los modelos; archivados en `Antigravity/_archivo/migraciones_alembic_antiguas_modelo_financiero/` | Base temporal creada desde cero con `alembic upgrade head`: `pg_dump --schema-only` idéntico a la real (233 sentencias; solo cambia el orden de columnas en 2 tablas) |
+| Q2 | 8 índices que existían en la BD sin declararse, añadidos a los modelos (si no, una migración autogenerada los habría borrado) | `alembic check` sobre la base real: sin diferencias |
+| Q2 | Base real marcada con `alembic stamp 0001_base --purge` (antes `e0af6e045937`; no cambia tablas ni datos) | `alembic current` = `0001_base (head)` |
+| Q2 | El arranque ya no crea ni altera nada: comprueba que la base está en la última revisión y si no, no arranca (`CFG-004`). Fuera `create_all` de `create_admin.py` y los índices en tiempo de ejecución | Arranque real: "Base de datos en la revisión 0001_base (última)"; rentabilidad de clientes responde |
+| Q2 | `downgrade` de la base bloqueado (borraría todas las tablas) | Test |
+| D1 | El reset exige `{"confirmacion": "LIMPIAR"}` en el servidor (`ADM-007`) y deja registro `RESET_DATOS` en la auditoría con lo borrado; la pantalla recomienda copia previa | Tests con la app real (BD simulada) + API real con frase incorrecta: rechazado y datos intactos |
+
+**Volver atrás:** `alembic stamp` no cambió datos; para deshacer del todo, restaurar el `.dump` anterior con `pg_restore` y volver al commit previo.
+
+**Pendiente:** fases 4 y 5 (S4: react-router v7, PyJWT y FastAPI; Q3), S7, S8, D4 y los avisos de Ruff/ESLint. `pip-audit` no ejecutado.
 
 ## Resumen
 
