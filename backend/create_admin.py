@@ -1,13 +1,11 @@
 """
 Ejecuta este script una sola vez para crear el primer usuario administrador.
-Uso: python create_admin.py
+Uso: python create_admin.py   (antes: python -m alembic upgrade head, que crea las tablas)
 """
 import sys
-from app.core.database import SessionLocal, Base, engine
+from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.user import User, UserRole
-
-Base.metadata.create_all(bind=engine)
 
 db = SessionLocal()
 

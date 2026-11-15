@@ -26,6 +26,10 @@ class DiarioApunte(Base):
         Index("ix_diario_ejercicio_estado",        "ejercicio", "estado"),
         Index("ix_diario_ejercicio_recibo",        "ejercicio", "recibo_id"),
         Index("ix_diario_ejercicio_num_cuenta",    "ejercicio", "numero_cuenta"),
+        # Existían en la BD (antiguo migrations/001_add_performance_indexes.sql) sin estar
+        # declarados: sin esto, una migración autogenerada propondría borrarlos.
+        Index("ix_diario_ejercicio",               "ejercicio"),
+        Index("ix_diario_tipo_cuenta",             "tipo_cuenta"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

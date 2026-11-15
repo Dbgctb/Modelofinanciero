@@ -29,7 +29,7 @@ export const adminApi = {
 
   poblarTasasIcea: (anyo: number) => api.post('/admin/tasas-mercado/poblar-icea', { anyo }),
 
-  resetDatos: () => api.post('/admin/reset-datos'),
+  resetDatos: (confirmacion: string) => api.post('/admin/reset-datos', { confirmacion }),
 
   listarAuxiliaresComision: (params?: { anyo?: number }) =>
     api.get('/admin/auxiliares-comision', { params }),

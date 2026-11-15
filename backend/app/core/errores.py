@@ -86,6 +86,10 @@ _ENTRADAS = [
      "Lista en ALLOWED_ORIGINS solo los dominios del frontend (p. ej. http://localhost:5173)."),
     ("CFG-003", 500, "ALGORITHM no válido ({valor}): debe ser HS256, HS384 o HS512",
      "Pon ALGORITHM=HS256 en backend/.env."),
+    ("CFG-004", 500, "La base de datos está en la revisión {actual} y el código espera {esperada}",
+     "Haz copia de seguridad y aplica las migraciones desde backend/: "
+     "venv\\Scripts\\python -m alembic upgrade head. Si la base es anterior a la migración base "
+     "(revisión e0af6e045937), ver la cabecera de alembic/versions/0001_base_esquema_completo.py."),
 
     # ── Archivos (común a todas las cargas) ──────────────────────────────────
     ("ARC-001", 400, "El archivo seleccionado está vacío. Comprueba el fichero antes de subirlo",
@@ -157,6 +161,8 @@ _ENTRADAS = [
     ("ADM-005", 422, "No se pudo leer el archivo. Debe ser un CSV con columnas auxiliar y comisión colaborador.",
      "Revisa separador y columnas del CSV."),
     ("ADM-006", 422, _COLUMNAS, "Renombra las columnas del fichero como indica el mensaje."),
+    ("ADM-007", 400, "Confirmación incorrecta: escribe {frase} para borrar los datos",
+     "El reset exige la frase de confirmación también en el servidor. Haz antes una copia de seguridad."),
 
     # ── Analítico ────────────────────────────────────────────────────────────
     ("ANA-001", 400, "Naturaleza inválida. Valores posibles: {valores}", "Elige una de las naturalezas listadas."),

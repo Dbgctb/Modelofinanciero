@@ -42,7 +42,7 @@ export default function ResetDatos() {
   const timerRef = useRef<number | null>(null)
 
   const reset = useMutation({
-    mutationFn: () => adminApi.resetDatos(),
+    mutationFn: () => adminApi.resetDatos(confirmText),
     onSuccess: (res) => {
       const tiempo_segundos = startTimeRef.current
         ? Math.round((Date.now() - startTimeRef.current) / 1000)
@@ -144,7 +144,7 @@ export default function ResetDatos() {
             type="warning"
             showIcon
             message="Esta acción es irreversible"
-            description="Se eliminarán permanentemente todos los datos de carga. Úsala solo en entornos de prueba."
+            description="Se eliminarán permanentemente todos los datos de carga. Úsala solo en entornos de prueba y haz antes una copia de seguridad de la base de datos (pg_dump)."
           />
 
           <Card title={<Space><DatabaseOutlined />¿Qué se elimina?</Space>} size="small">
